@@ -1,0 +1,8 @@
+#!/bin/sh
+# Build the page and the server, then serve. Any failure here exits non-zero,
+# and the kernel tells this process's agent what went wrong.
+set -e
+cd "$(dirname "$0")/.."
+(cd web && npm ci --no-audit --no-fund --loglevel=error && npm run build)
+cargo build --release --quiet
+exec target/release/page
