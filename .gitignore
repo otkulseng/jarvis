@@ -27,3 +27,10 @@ rustc-ice-*.txt
 # Added by cargo
 
 /target
+
+# jarvis: what this home keeps for itself (the registry, the working
+# directories of its processes, their logs). Only these are ignored, so that
+# a process's own `.jarvis/` directory in its tree is never hidden.
+/.jarvis/jarvis.db*
+/.jarvis/proc/
+/.jarvis/log/

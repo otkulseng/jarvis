@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""Harness adapter: Claude Code.
+
+A harness adapter is how the kernel starts a process's agent. The contract is
+the same for every harness, so the kernel knows nothing about any of them:
+
+  in   standard input        the prompt (the process's new messages)
+       working directory     the process's own directory
+       $JARVIS_SESSION       the session to continue, or empty for a new one
+       $JARVIS_GUIDE         path to the guide every agent is given
+       `jarvis` on $PATH     the command; `jarvis help` describes it
+  out  standard output       one JSON object:
+                               {"session": id to continue next time,
+                                "reply":   what the agent said last,
+                                ...anything else worth recording (cost, time)}
+       exit code             non-zero if the agent could not run
+
+To support another harness, add another executable next to this one and
+spawn processes with `--harness <its name>`.
+
+What the agent may do is decided here. By default it may edit files in its
+own directory, use the `jarvis` command, use all of git, and search the web.
+Set $JARVIS_CLAUDE_FLAGS to replace these flags (for example
+`--dangerously-skip-permissions` to let agents run any command).
+"""
+import json
+import os
+import shlex
+import subprocess
+import sys
+
+DEFAULT_FLAGS = [
+    "--permission-mode", "acceptEdits",
+    "--allowedTools",
+    "Bash(jarvis:*)", "Bash(git:*)", "Bash(ls:*)", "Bash(cat:*)",
+    "Read", "Edit", "Write", "Glob", "Grep", "WebSearch", "WebFetch",
+]
+
+LOST = (
+    "[jarvis] Your earlier session could not be continued, so you remember "
+    "nothing from it. Read what is in your .jarvis directory before acting.\n\n"
+)
+
+
+def claude(prompt, session, guide):
+    command = ["claude", "-p", "--output-format", "json", "--append-system-prompt", guide]
+    if session:
+        command += ["--resume", session]
+    flags = os.environ.get("JARVIS_CLAUDE_FLAGS")
+    command += shlex.split(flags) if flags is not None else DEFAULT_FLAGS
+    return subprocess.run(command, input=prompt, capture_output=True, text=True)
+
+
+def main():
+    prompt = sys.stdin.read()
+    session = os.environ.get("JARVIS_SESSION") or None
+    with open(os.environ["JARVIS_GUIDE"]) as f:
+        guide = f.read()
+    # The agent is also shown what `jarvis help` prints, so that the command
+    # is described in one place only: its own help.
+    overview = subprocess.run(["jarvis", "help"], capture_output=True, text=True)
+    if overview.returncode == 0:
+        guide += "\n## The `jarvis` command\n\nThis is what `jarvis help` prints:\n\n" + overview.stdout
+
+    done = claude(prompt, session, guide)
+    session_lost = False
+    if session and done.returncode != 0 and "No conversation found" in done.stderr + done.stdout:
+        session_lost = True
+        done = claude(LOST + prompt, None, guide)
+
+    try:
+        out = json.loads(done.stdout)
+    except ValueError:
+        out = None
+    if done.returncode != 0 or out is None or out.get("is_error"):
+        sys.stderr.write(done.stderr or done.stdout or "claude produced no output\n")
+        sys.exit(done.returncode or 1)
+
+    print(json.dumps({
+        "session": out.get("session_id"),
+        "reply": out.get("result") or "",
+        "harness": "claude",
+        "cost_usd": out.get("total_cost_usd"),
+        "duration_ms": out.get("duration_ms"),
+        "turns": out.get("num_turns"),
+        "session_lost": session_lost,
+    }))
+
+
+if __name__ == "__main__":
+    main()
