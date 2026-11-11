@@ -330,7 +330,12 @@ fn run(ctx: &Ctx, request: &Value, out: &mut dyn Out) -> Res<i32> {
                     who
                 }
             };
-            print(out, &ctx.mutate(Mutation::Send { from, to: args.to, body: body.trim_end().to_string() })?);
+            let sent = ctx.mutate(Mutation::Send { from, to: args.to, body: body.trim_end().to_string() })?;
+            if args.json {
+                out.line(&json!({"id": sent["id"], "to": sent["to"], "note": sent["e"][0]}).to_string());
+            } else {
+                print(out, &sent);
+            }
             Ok(0)
         }
         Cmd::Messages(args) => messages(ctx, &by, args, out),

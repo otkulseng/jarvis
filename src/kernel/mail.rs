@@ -100,7 +100,7 @@ impl Kernel {
                 kernel_of(to)
             ));
         }
-        Ok(said(vec![format!("sent message {id} to {to}")], notes))
+        Ok(json!({"o": [format!("sent message {id} to {to}")], "e": notes, "id": id, "to": to}))
     }
 
     /// Have another kernel carry out a command. It travels as a message to

@@ -103,7 +103,8 @@ refused on a spawn asker "a bare name"
 refused jarvis up a
 
 step="a message there and back"
-as asker@a send answerer@c "hello" > /dev/null
+# For programs: the message's name, as JSON.
+as asker@a send --json answerer@c "hello" | has "x['id'].startswith('a:') and x['to']=='answerer@c' and x['note'] is None"
 answered() { on a messages asker@a --json | has "any(m['body'].startswith('ack ') and m['to']=='asker@a' for m in x)"; }
 until_ok 20 answered
 # The sender's kernel was told how far the message got on c.

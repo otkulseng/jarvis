@@ -301,14 +301,17 @@ pub enum Cmd {
         and when it was dealt with. A message that can never arrive (nobody of that \
         name is there) comes back as a notice to you. A message to a kernel that \
         nobody here has heard of, or that was closed, is refused at once.\n\n\
-        Prints `sent message ID to TO`; ID names the message, such as `laptop:412`.")]
+        Prints `sent message ID to TO`; ID names the message, such as `laptop:412`. \
+        Options (--as, --json) go before TO: everything after TO is the text.")]
     #[command(after_long_help = "Examples:\n\
         \x20 jarvis send polaris@laptop How do I get an interactive GPU node?\n\n\
         \x20 jarvis send human@laptop - <<'EOF'\n\
         \x20 The build works on Polaris now.\n\
         \x20 Two tests still fail; details are in my notes.\n\
         \x20 EOF\n\n\
-        \x20 git diff | jarvis send lammps@cannon-a")]
+        \x20 git diff | jarvis send lammps@cannon-a\n\n\
+        \x20 jarvis send --json polaris@laptop Are you there?\n\
+        \x20     {\"id\":\"laptop:412\",\"to\":\"polaris@laptop\",\"note\":null}")]
     Send(SendArgs),
 
     /// Read messages: those of a kernel, or those to and from one process
@@ -547,6 +550,11 @@ pub struct SendArgs {
     /// Send as someone else, such as `human@laptop`. For programs that pass on what a person typed
     #[arg(long = "as", value_name = "WHO")]
     pub sender: Option<String>,
+
+    /// Print JSON instead of a sentence: `{"id": the message's name, "to": TO,
+    /// "note": why it will not be read soon, if so}`
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args)]
