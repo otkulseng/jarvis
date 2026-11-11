@@ -6,7 +6,7 @@
   import Inbox from './lib/Inbox.svelte';
   import MapView from './lib/map/MapView.svelte';
   import ProcessView from './lib/ProcessView.svelte';
-  import { go, href, store } from './lib/live/store.svelte';
+  import { go, href, store, toMap } from './lib/live/store.svelte';
 
   onMount(() => store.start());
 
@@ -20,7 +20,10 @@
       return;
     }
     const typing = event.target instanceof HTMLElement && event.target.matches('input, textarea');
-    if (event.key === 'Escape' && !typing && route.view !== 'map') go({ view: 'map' });
+    if (event.key !== 'Escape' || typing) return;
+    // Esc goes back: to the map, and on the map one group outwards.
+    if (route.view !== 'map') go(toMap());
+    else if (route.path.length) go(toMap(route.path.slice(0, -1)));
   }
 </script>
 
@@ -28,9 +31,9 @@
 
 <div class="app" class:docked={store.dockOpen}>
   <header>
-    <a class="brand" href={href({ view: 'map' })}>jarvis</a>
+    <a class="brand" href={href(toMap())}>jarvis</a>
     <nav>
-      <a class:on={route.view === 'map'} href={href({ view: 'map' })}>Map</a>
+      <a class:on={route.view === 'map'} href={href(toMap())}>Map</a>
       <a class:on={route.view === 'inbox'} href={href({ view: 'inbox' })}>
         Inbox{#if store.unread.length}<span class="count">{store.unread.length}</span>{/if}
       </a>

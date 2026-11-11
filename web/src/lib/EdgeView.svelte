@@ -1,7 +1,7 @@
 <script lang="ts">
   // The messages between two processes. The reader is not part of this
   // conversation, so there is nothing to type into.
-  import { HUMAN, edgeTopic, go, href, store, toProcess } from './live/store.svelte';
+  import { edgeTopic, go, href, HUMAN, store, toMap, toProcess } from './live/store.svelte';
   import Thread from './Thread.svelte';
 
   let { a, b }: { a: string; b: string } = $props();
@@ -17,7 +17,7 @@
 
 <section>
   <header>
-    <a class="back" href={href({ view: 'map' })} title="Back to the map (Esc)">
+    <a class="back" href={href(toMap())} title="Back to the map (Esc)">
       <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
         <path d="M10 3 5 8l5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
       </svg>

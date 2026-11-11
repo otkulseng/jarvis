@@ -34,4 +34,12 @@ What is drawn and how: `web/src/lib/map/engine.ts`. Which nodes and lines
 there are, their sizes and colours: `web/src/lib/map/MapView.svelte`. The
 engine must stay ignorant of jarvis: give it numbers, colours and labels.
 
+## Another way to group or find processes
+
+Do not build one. The map arranges and lights by *tags*, and anything a
+process belongs to can be a tag: `jarvis tag NAME kind=value`. A fact that
+jarvis already reports about a process becomes a tag in one place, `tagsOf`
+in `web/src/lib/live/store.svelte.ts`. `MapView.svelte` then offers it under
+"arrange by" and "light" without further work.
+
 See [[how-the-page-works]] for the reasons behind these places.

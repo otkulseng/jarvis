@@ -2,7 +2,7 @@
   // Everything addressed to the reader, from anyone, newest first.
   import { ago, clock } from './api';
   import { light } from './markdown';
-  import { KERNEL, go, href, store, toProcess } from './live/store.svelte';
+  import { go, href, KERNEL, store, toMap, toProcess } from './live/store.svelte';
 
   const messages = $derived([...store.thread('inbox').messages].reverse());
 
@@ -15,7 +15,7 @@
 
 <section>
   <header>
-    <a class="back" href={href({ view: 'map' })} title="Back to the map (Esc)">
+    <a class="back" href={href(toMap())} title="Back to the map (Esc)">
       <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
         <path d="M10 3 5 8l5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
       </svg>

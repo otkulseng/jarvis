@@ -6,7 +6,7 @@
   import Composer from './Composer.svelte';
   import Notes from './Notes.svelte';
   import StatePill from './StatePill.svelte';
-  import { go, href, processTopic, store, toProcess, type Tab } from './live/store.svelte';
+  import { go, href, processTopic, store, type Tab, toMap, toProcess } from './live/store.svelte';
   import Thread from './Thread.svelte';
 
   let { name, tab, path }: { name: string; tab: Tab; path: string } = $props();
@@ -36,7 +36,7 @@
     problem = '';
     try {
       await act(action, name);
-      if (action === 'remove') go({ view: 'map' });
+      if (action === 'remove') go(toMap());
     } catch (error) {
       problem = error instanceof Error ? error.message : String(error);
     } finally {
@@ -56,7 +56,7 @@
 <section>
   {#if proc}
     <header>
-      <a class="back" href={href({ view: 'map' })} title="Back to the map (Esc)">
+      <a class="back" href={href(toMap())} title="Back to the map (Esc)">
         <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
           <path d="M10 3 5 8l5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
@@ -75,6 +75,7 @@
           <span>made by {store.label(proc.parent)} {ago(proc.created_at, store.now)}</span>
           <span>{proc.turns} turn{proc.turns === 1 ? '' : 's'}{proc.cost_usd != null ? ` · ${money(proc.cost_usd)}` : ''}</span>
           {#if proc.has_run}<span>has a service</span>{/if}
+          {#each Object.entries(proc.tags ?? {}) as [key, value] (key)}<span>{key} <strong>{value}</strong></span>{/each}
           {#if proc.mail_waiting}<span class="waiting">{proc.mail_waiting} message{proc.mail_waiting === 1 ? '' : 's'} waiting</span>{/if}
         </p>
       </div>
@@ -116,7 +117,7 @@
   {:else if store.loaded}
     <div class="missing">
       <p>There is no process called <strong>{name}</strong>.</p>
-      <a class="btn" href={href({ view: 'map' })}>Back to the map</a>
+      <a class="btn" href={href(toMap())}>Back to the map</a>
     </div>
   {/if}
 </section>

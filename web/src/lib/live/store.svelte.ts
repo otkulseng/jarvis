@@ -18,8 +18,16 @@ export const HUMAN = 'human';
 export const KERNEL = 'kernel';
 
 export type Tab = 'chat' | 'notes' | 'activity';
+/** One step into the map: the processes whose tag `key` has this `value`. */
+export interface Step {
+  key: string;
+  value: string;
+}
+/** The value shown for a process that has no value for a tag. */
+export const NONE = '—';
+
 export type Route =
-  | { view: 'map' }
+  | { view: 'map'; path: Step[] }
   | { view: 'inbox' }
   | { view: 'process'; name: string; tab: Tab; path: string }
   | { view: 'edge'; a: string; b: string };
@@ -34,7 +42,10 @@ function parse(hash: string): Route {
   }
   if (parts[0] === 'e' && parts[1] && parts[2]) return { view: 'edge', a: parts[1], b: parts[2] };
   if (parts[0] === 'inbox') return { view: 'inbox' };
-  return { view: 'map' };
+  // `#/m/place=cluster one/project=moe`: inside one group of the map, then inside one of its groups.
+  const steps = parts[0] === 'm' ? parts.slice(1) : [];
+  const path = steps.filter((s) => s.indexOf('=') > 0).map((s) => ({ key: s.slice(0, s.indexOf('=')), value: s.slice(s.indexOf('=') + 1) }));
+  return { view: 'map', path };
 }
 
 /** The address of a place in the page. */
@@ -50,9 +61,13 @@ export function href(route: Route): string {
     case 'inbox':
       return '#/inbox';
     default:
-      return '#/';
+      return route.path.length ? '#/m/' + route.path.map((s) => enc(`${s.key}=${s.value}`)).join('/') : '#/';
   }
 }
+
+/** The map: all of it, or inside the groups named by `path`. */
+export const toMap = (path: Step[] = []): Route => ({ view: 'map', path });
+export const pathKey = (path: Step[]) => path.map((s) => `${s.key}=${s.value}`).join('/');
 
 export function go(route: Route) {
   location.hash = href(route);
@@ -239,6 +254,11 @@ class Store {
   build: string | null = null;
   pulseListeners = new Set<(from: string, to: string) => void>();
 
+  /** How the map is arranged at each level the reader has been to: which tag its groups are made by. */
+  private arrange = $state<Record<string, string>>(remembered('jarvis.arrange', {}));
+  /** What the reader asked to have lit on the map, at every level; null for nothing in particular. */
+  light = $state<Step | null>(remembered<Step | null>('jarvis.light', null));
+
   /** For each sender, the newest message to the human that has been read. */
   private seen = $state<Record<string, number>>(remembered('jarvis.seen', {}));
   /** Everything up to this message counts as read (set the first time the page is opened). */
@@ -283,6 +303,28 @@ class Store {
   markAllRead() {
     this.seenAll = this.thread('inbox').messages.at(-1)?.id ?? 0;
     remember('jarvis.seenAll', this.seenAll);
+  }
+
+  /** What a process belongs to: what jarvis knows about it, and the tags it was given. */
+  tagsOf(p: Proc): Record<string, string> {
+    const known: Record<string, string> = { 'made by': this.label(p.parent), state: p.state === 'thinking' ? 'working' : p.state };
+    if (p.from) known.expert = p.from;
+    return { ...known, ...(p.tags ?? {}) };
+  }
+
+  /** The tag the map is arranged by at this level; '' for none. */
+  arrangeAt(path: Step[]): string {
+    return this.arrange[pathKey(path)] ?? '';
+  }
+
+  setArrange(path: Step[], key: string) {
+    this.arrange = { ...this.arrange, [pathKey(path)]: key };
+    remember('jarvis.arrange', this.arrange);
+  }
+
+  setLight(light: Step | null) {
+    this.light = light;
+    remember('jarvis.light', light);
   }
 
   toggleDock(open = !this.dockOpen) {
@@ -330,8 +372,12 @@ class Store {
         return `the messages between ${r.a} and ${r.b}`;
       case 'inbox':
         return 'the inbox';
-      default:
-        return 'the map';
+      default: {
+        const inside = r.path.length ? `, inside ${r.path.map((s) => `${s.key}: ${s.value}`).join(' › ')}` : '';
+        const arranged = this.arrangeAt(r.path) ? `, arranged by ${this.arrangeAt(r.path)}` : '';
+        const lit = this.light ? `, with ${this.light.key}: ${this.light.value} lit` : '';
+        return `the map${inside}${arranged}${lit}`;
+      }
     }
   }
 

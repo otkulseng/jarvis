@@ -13,6 +13,8 @@ export interface Proc {
   about: string;
   /** What it was started from: an expert's branch, another process, or nothing. */
   from?: string | null;
+  /** What it belongs to, in anyone's words: `{project: "moe", place: "cluster one"}`. Set with `jarvis tag`. */
+  tags?: Record<string, string>;
   branch: string;
   harness: string;
   /** Who created it: a process, or `human`. */
@@ -95,11 +97,16 @@ export async function fetchSteps(who: string, after: number, before: number | nu
   return steps;
 }
 
-export async function fetchPositions(): Promise<Record<string, [number, number, number]>> {
-  return answer(await fetch('/api/positions'));
+/** Where the reader put the points of the map, for each arrangement of it. */
+export type SavedPositions = Record<string, Record<string, [number, number, number]>>;
+
+export async function fetchPositions(): Promise<SavedPositions> {
+  const saved = await answer<Record<string, unknown>>(await fetch('/api/positions'));
+  // Only what is in today's shape: one set of positions per arrangement.
+  return Object.fromEntries(Object.entries(saved).filter(([, v]) => v && typeof v === 'object' && !Array.isArray(v))) as SavedPositions;
 }
 
-export function savePositions(positions: Record<string, [number, number, number]>): void {
+export function savePositions(positions: SavedPositions): void {
   void post('/api/positions', positions).catch(() => {});
 }
 
