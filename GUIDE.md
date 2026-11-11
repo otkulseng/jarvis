@@ -59,8 +59,9 @@ matters, and end your turn. The answer arrives as a new message.
 
 **Answer to the address a message came from.** Each message you get says who
 it is from, in full: `polaris@laptop`, `human@laptop`. Send your answer
-there. A bare name (`jarvis send polaris ...`) is for first contact: it means
-the process of that name on your own kernel, or else the nearest one. `human`
+there. A bare name (`jarvis send polaris ...`) means the process of that name
+on your own kernel and no other; a process on another kernel is always named
+in full, and `jarvis ps` shows every address. `human`
 alone is the person as seen from your kernel; if the person wrote to you from
 another kernel, answer that address, or they will read it late.
 

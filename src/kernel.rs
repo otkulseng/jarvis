@@ -1295,7 +1295,7 @@ impl Kernel {
                         forked = Some(what.clone());
                     }
                     Some(commit)
-                } else if let Some(proc) = self.one_named(what)? {
+                } else if let Some(proc) = self.find(what)? {
                     let commit = repo.commit_of(&proc.branch).ok_or_else(|| format!("the branch of {} is not in this repository", proc.addr))?;
                     forked = Some(proc.addr);
                     Some(commit)
@@ -1303,7 +1303,8 @@ impl Kernel {
                     Some(commit)
                 } else {
                     return Err(format!(
-                        "`{what}` is neither a branch, tag or commit that git knows here, nor the name of one process (`jarvis ps` lists them)"
+                        "`{what}` is neither a branch, tag or commit that git knows here, nor the name of a process on the kernel `{}` (`jarvis ps` lists them; one on another kernel is `NAME@KERNEL`)",
+                        self.me
                     )
                     .into());
                 }
@@ -1421,16 +1422,6 @@ impl Kernel {
         self.advertise();
         self.tend(name);
         Ok(said(vec![addr], notes))
-    }
-
-    /// The one process a bare name stands for: this kernel's, or the only one
-    /// of that name anywhere.
-    fn one_named(&self, name: &str) -> Res<Option<Proc>> {
-        if let Some(proc) = self.find(name)? {
-            return Ok(Some(proc));
-        }
-        let mut all = index::procs_named(&self.db, name)?;
-        Ok(if all.len() == 1 { all.pop() } else { None })
     }
 
     /// A process of this kernel, from what a command called it.
@@ -1566,29 +1557,17 @@ impl Kernel {
         if matches!(name, HUMAN | KERNEL) || self.find(name)?.is_some() {
             return Ok(self.addr(name));
         }
-        // The nearest kernel that has a process of that name.
-        let mut near: Vec<(u64, &String)> = self.table.iter().filter(|(_, k)| k.procs.iter().any(|p| p == name)).map(|(kernel, k)| (k.hops, kernel)).collect();
-        near.sort();
-        match near.as_slice() {
-            [] => {}
-            [(_, kernel)] => return Ok(at(name, kernel)),
-            [(first, kernel), (second, _), ..] if first < second => return Ok(at(name, kernel)),
-            _ => {
-                let nearest = near[0].0;
-                let which: Vec<String> = near.iter().filter(|(hops, _)| *hops == nearest).map(|(_, kernel)| at(name, kernel)).collect();
-                return Err(format!("several processes called `{name}` are equally near: {}. Say which one", which.join(", ")).into());
-            }
-        }
-        // None can be reached now. If the records know exactly one, it is meant.
-        let known = index::procs_named(&self.db, name)?;
-        match known.as_slice() {
-            [] => Err(format!("no process called `{name}` is known here (`jarvis ps` lists them)").into()),
-            [one] => Ok(one.addr.clone()),
-            many => Err(format!(
-                "several processes are called `{name}`, none on this kernel: {}. Say which one",
-                many.iter().map(|p| p.addr.as_str()).collect::<Vec<_>>().join(", ")
+        // A bare name is this kernel's process and nothing else.
+        let elsewhere: Vec<String> = index::procs_named(&self.db, name)?.into_iter().map(|p| p.addr).collect();
+        if elsewhere.is_empty() {
+            Err(format!("there is no process called `{name}` on the kernel `{}` (`jarvis ps` lists them)", self.me).into())
+        } else {
+            Err(format!(
+                "there is no process called `{name}` on the kernel `{}`. A process on another kernel needs its whole address: {}",
+                self.me,
+                elsewhere.join(" or ")
             )
-            .into()),
+            .into())
         }
     }
 

@@ -102,6 +102,11 @@ JARVIS_KERNEL=a jarvis spawn far --on b --harness echo --prompt "A test process.
 until_ok 20 kernel_is b "k['processes']==1"
 echo "a second way round took over when a link was taken away, and a process was created two kernels away"
 
+# A bare name is this kernel's process only: `answerer` runs on c, not on a.
+if JARVIS_KERNEL=a jarvis send answerer "to the wrong place" > /dev/null 2>&1 < /dev/null; then
+    echo "a bare name reached a process on another kernel" >&2; exit 1
+fi
+
 # A second kernel of a name that is taken is refused.
 if jarvis up a > /dev/null 2>&1; then echo "a second kernel called a was allowed" >&2; exit 1; fi
 

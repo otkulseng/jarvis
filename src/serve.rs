@@ -337,7 +337,7 @@ fn target(ctx: &Ctx, on: &Option<String>, command: &Cmd) -> Res<Option<String>> 
 // ---------------------------------------------------------------- helpers
 
 /// The one process `who` stands for: an address, or a bare name, which means
-/// this kernel's process of that name, or else the only one there is.
+/// this kernel's process of that name.
 fn one(ctx: &Ctx, who: &str) -> Res<Proc> {
     if who.contains('@') {
         return index::find_proc(&ctx.conn, who)?.ok_or_else(|| format!("there is no process `{who}` (`jarvis ps` lists them)").into());
@@ -347,20 +347,18 @@ fn one(ctx: &Ctx, who: &str) -> Res<Proc> {
             return Ok(proc);
         }
     }
-    let mut all = index::procs_named(&ctx.conn, who)?;
-    match all.len() {
-        0 => Err(format!("there is no process called `{who}` (`jarvis ps` lists them)").into()),
-        1 => Ok(all.pop().expect("there is one")),
-        _ => Err(format!(
-            "several processes are called `{who}`: {}. Say which one",
-            all.iter().map(|p| p.addr.as_str()).collect::<Vec<_>>().join(", ")
-        )
-        .into()),
+    // A bare name is this kernel's process and nothing else.
+    let here = if ctx.me.is_empty() { "with no kernel, a process needs its whole address".to_string() } else { format!("there is no process called `{who}` on the kernel `{}`", ctx.me) };
+    let all: Vec<String> = index::procs_named(&ctx.conn, who)?.into_iter().map(|p| p.addr).collect();
+    if all.is_empty() {
+        Err(format!("there is no process called `{who}` (`jarvis ps` lists them)").into())
+    } else {
+        Err(format!("{here}. Did you mean {}?", all.join(" or ")).into())
     }
 }
 
 /// The address to look records up by: `who` as given if it is one (also of a
-/// process that is gone), else the one process of that name.
+/// process that is gone), else this kernel's process of that name.
 fn address(ctx: &Ctx, who: &str) -> Res<String> {
     if who.contains('@') {
         return Ok(who.to_string());

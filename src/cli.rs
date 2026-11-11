@@ -54,8 +54,8 @@ pub fn overview() -> String {
         }
     }
     text.push_str(
-        "\nWHO is a process: `lammps` (the one on this kernel, or the nearest one), or\n\
-         `lammps@cannon-a` (that one exactly). `human` is the person.\n\
+        "\nWHO is a process: `lammps` (the one on this kernel, never another), or\n\
+         `lammps@cannon-a` (that one exactly, wherever it is). `human` is the person.\n\
          \n\
          Every command is carried out by a kernel: the one you are a process of, or the\n\
          only one on this machine, or the one named with --on KERNEL or $JARVIS_KERNEL.\n\
@@ -245,9 +245,9 @@ pub enum Cmd {
         (see `jarvis messages`).\n\n\
         Sending is the only way to tell anyone anything. What an agent writes at the \
         end of its turn is logged and reaches nobody.\n\n\
-        TO is a process. `lammps` means the one on this kernel; if there is none, \
-        the nearest one over the links; if several are equally near, you are asked to \
-        say which. `lammps@cannon-a` means that one. To answer a message, send to the \
+        TO is a process. `lammps` means the one on this kernel and no other: if there \
+        is none, the message is refused. A process on another kernel is always named \
+        in full: `lammps@cannon-a`. To answer a message, send to the \
         address it came from. `human` is the person at this kernel; `human@laptop` \
         the person at that one.\n\n\
         Everything after TO is the text. With no text, or with `-`, the text is read \
@@ -450,7 +450,7 @@ pub struct Spawn {
               An expert is a branch with a plain name, such as `page`, that its processes \
               land their finished work on. A process's own branch is its address, \
               `NAME@KERNEL`. WHAT is tried as something git knows first, then as the name of \
-              a process (this kernel's, or the only one of that name), then as a branch of \
+              a process on this kernel, then as a branch of \
               that name on the remote (`origin/WHAT`).")]
     pub from: Option<String>,
 
