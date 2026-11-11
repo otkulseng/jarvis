@@ -1,43 +1,158 @@
+/* Colours and sizes are variables. Use them instead of literal values, so
+   that the light and the dark look stay in step. */
 :root {
-  --bg: #f6f6f3;
-  --panel: #ffffff;
-  --text: #1c1c1a;
-  --muted: #6b6b66;
-  --line: #deded8;
-  --accent: #2f5fd0;
+  color-scheme: light dark;
+  --bg: #f6f6f4;
+  --surface: #ffffff;
+  --raised: #f0f0ed;
+  --line: #e1e1dc;
+  --line-soft: #ebebe7;
+  --text: #1d1d1b;
+  --muted: #6c6e73;
+  --faint: #a2a4a8;
+  --accent: #6a55e0;
+  --accent-soft: rgba(106, 85, 224, 0.1);
   --on-accent: #ffffff;
   --good: #1f8a4c;
+  --warn: #a86f12;
   --bad: #c0392b;
-  --warn: #b7791f;
+  --bad-soft: rgba(192, 57, 43, 0.1);
+  --shadow: 0 8px 28px rgba(20, 20, 30, 0.12);
+  --dot: rgba(0, 0, 0, 0.07);
+  --edge: #c9c9c3;
+
+  /* Older names, still used in places. */
+  --panel: var(--raised);
+
+  --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --radius: 10px;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #151614;
-    --panel: #1e1f1d;
-    --text: #e8e8e3;
-    --muted: #9a9a93;
-    --line: #33342f;
-    --accent: #7ea2ff;
-    --on-accent: #10141f;
-    --good: #4cc27d;
-    --bad: #f0796b;
-    --warn: #e0b050;
+    --bg: #0e0f11;
+    --surface: #15171a;
+    --raised: #1c1f23;
+    --line: #2a2d32;
+    --line-soft: #202327;
+    --text: #e7e7e4;
+    --muted: #8d9096;
+    --faint: #5c5f66;
+    --accent: #9d8cff;
+    --accent-soft: rgba(157, 140, 255, 0.14);
+    --on-accent: #15121f;
+    --good: #4cc38a;
+    --warn: #e2b04a;
+    --bad: #f0716a;
+    --bad-soft: rgba(240, 113, 106, 0.12);
+    --shadow: 0 10px 34px rgba(0, 0, 0, 0.5);
+    --dot: rgba(255, 255, 255, 0.055);
+    --edge: #3d4148;
   }
+}
+
+html,
+body,
+#app {
+  height: 100%;
 }
 
 body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font: 14px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
-h2 {
-  margin: 0 0 10px;
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+code,
+pre,
+kbd {
+  font-family: var(--mono);
+  font-size: 0.86em;
+}
+
+kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
   color: var(--muted);
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+/* Thin scrollbars that stay out of the way. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+/* A plain button. `.primary` and `.danger` are the two that stand out. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
+}
+.btn:hover:not(:disabled) {
+  background: var(--raised);
+  border-color: var(--faint);
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.btn.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+.btn.primary:hover:not(:disabled) {
+  background: var(--accent);
+  filter: brightness(1.08);
+}
+.btn.danger:hover:not(:disabled) {
+  border-color: var(--bad);
+  background: var(--bad-soft);
+  color: var(--bad);
+}
+.btn.quiet {
+  border-color: transparent;
+  background: none;
+  color: var(--muted);
+}
+.btn.quiet:hover:not(:disabled) {
+  background: var(--raised);
+  border-color: transparent;
+  color: var(--text);
 }

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { clock } from './api';
-  import { markdown, span, status, type ToolUse, type Turn } from './turns';
+  import { light } from './markdown';
+  import { span, status, type ToolUse, type Turn } from './turns';
 
   let {
     turn,
@@ -69,7 +70,7 @@
     <div class="rows">
       {#each turn.rows as row (row.key)}
         {#if row.kind === 'said'}
-          <div class="said" class:thinking={row.thinking}>{@html markdown(row.text)}</div>
+          <div class="said" class:thinking={row.thinking}>{@html light(row.text)}</div>
         {:else}
           {@const how = status(row, turn)}
           <div class="tool {how}">

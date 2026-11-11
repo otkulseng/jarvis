@@ -128,17 +128,3 @@ export function span(ms: number): string {
   const m = Math.floor(s / 60);
   return m < 60 ? `${m}m ${s % 60}s` : `${Math.floor(m / 60)}h ${m % 60}m`;
 }
-
-const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-/** The little markdown agents write: code blocks, `code`, **bold**. Everything else stays text. */
-export function markdown(text: string): string {
-  return escape(text)
-    .split(/```[^\n]*\n?([\s\S]*?)```/g)
-    .map((part, i) =>
-      i % 2
-        ? `<pre>${part.replace(/\n$/, '')}</pre>`
-        : part.replace(/`([^`\n]+)`/g, '<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>'),
-    )
-    .join('');
-}

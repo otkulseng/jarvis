@@ -1,8 +1,81 @@
 #!/bin/sh
-# Build the page and the server, then serve. Any failure here exits non-zero,
-# and the kernel tells this process's agent what went wrong.
-set -e
-cd "$(dirname "$0")/.."
-(cd web && npm ci --no-audit --no-fund --loglevel=error && npm run build)
-cargo build --release --quiet
-exec target/release/page
+# Serve the page, and bring in a new version without taking the page down.
+#
+# The kernel starts this, and starts it again whenever a turn changed the
+# files here. Each time:
+#
+#   1. If the code of the page did not change (only notes did, say), the
+#      build there is served again at once.
+#   2. Otherwise the last good build is served straight away, while the new
+#      version is built beside it.
+#   3. If the build succeeds, the new version takes over. That takes a moment,
+#      and every open page reloads itself.
+#   4. If it fails, the last good build stays up and this process's agent is
+#      sent the error. With no earlier build to fall back on, this exits with
+#      the error, and the kernel tells the agent.
+#
+# Builds are kept in .build/, which is not committed.
+cd "$(dirname "$0")/.." || exit 1
+mkdir -p .build
+
+# The name of a build: what its code is. Uncommitted changes get a name of
+# their own, so that they are built.
+id=$(git rev-parse HEAD:web HEAD:src HEAD:Cargo.toml HEAD:Cargo.lock 2>/dev/null | git hash-object --stdin | cut -c1-12)
+if [ -z "$id" ] || [ -n "$(git status --porcelain -- web src Cargo.toml Cargo.lock 2>/dev/null)" ]; then
+    id="work-$(date +%s)"
+fi
+
+serve() { # serve <build>, in place of this script
+    PAGE_DIST=".build/$1/dist" PAGE_BUILD="$1" exec ".build/$1/page"
+}
+
+current=$(cat .build/current 2>/dev/null)
+[ -x ".build/$current/page" ] || current=""
+
+if [ "$current" = "$id" ]; then
+    serve "$id"
+fi
+
+old=""
+if [ -n "$current" ]; then
+    PAGE_DIST=".build/$current/dist" PAGE_BUILD="$current" ".build/$current/page" &
+    old=$!
+fi
+
+build() {
+    (
+        cd web || exit 1
+        # Installing the npm packages is slow, and needed only when the list of them changed.
+        if ! cmp -s package-lock.json node_modules/.installed-from 2>/dev/null; then
+            npm ci --no-audit --no-fund --loglevel=error && cp package-lock.json node_modules/.installed-from || exit 1
+        fi
+        npm run build
+    ) || return 1
+    cargo build --release --quiet || return 1
+    rm -rf ".build/$id.tmp" ".build/$id"
+    mkdir -p ".build/$id.tmp" && cp -R web/dist ".build/$id.tmp/dist" && cp target/release/page ".build/$id.tmp/page" &&
+        mv ".build/$id.tmp" ".build/$id"
+}
+
+if build > .build/build.log 2>&1; then
+    echo "$id" > .build/current
+    # Keep this build and the one before it.
+    for dir in .build/*/; do
+        name=$(basename "$dir")
+        [ "$name" = "$id" ] || [ "$name" = "$current" ] || rm -rf "$dir"
+    done
+    if [ -n "$old" ]; then
+        kill "$old" 2>/dev/null
+        wait "$old" 2>/dev/null
+    fi
+    serve "$id"
+fi
+
+if [ -z "$old" ]; then
+    cat .build/build.log >&2
+    exit 1
+fi
+jarvis send "${JARVIS_NAME:-$JARVIS_ID}" "[page] The new version of the page did not build, so the page is still showing the version before it. Fix the error; the build is tried again when your files change. The end of .build/build.log:
+
+$(tail -n 40 .build/build.log)" > /dev/null 2>&1
+wait "$old"

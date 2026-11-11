@@ -1,20 +1,26 @@
 // The page's view of jarvis. Everything comes from the server in this
 // directory's parent (`src/main.rs`), which gets it from the `jarvis` command.
 
+export type State = 'idle' | 'thinking' | 'failing' | 'stopped';
+
 export interface Proc {
+  /** Its name. (`id` and `name` are the same thing.) */
   id: string;
   name: string | null;
   /** `failing`: its last turn failed, and its mail waits for the next try. */
-  state: 'idle' | 'thinking' | 'failing' | 'stopped';
+  state: State;
   /** How the process describes itself: the first line of its `.jarvis/ABOUT.md`. */
   about: string;
-  /** The jarvis home it runs in. */
-  home: string;
+  /** What it was started from: an expert's branch, another process, or nothing. */
+  from?: string | null;
+  branch: string;
   harness: string;
-  /** Who created it: a process id, or `human`. */
+  /** Who created it: a process, or `human`. */
   parent: string;
   created_at: number;
+  turns: number;
   cost_usd: number | null;
+  mail_waiting: number;
   /** When its turn in progress began, if one is. */
   busy_since: number | null;
   /** Turns that failed in a row. */
@@ -60,29 +66,60 @@ export interface StepData {
 export const isStep = (fact: Fact) => fact.kind === 'step';
 
 export interface Snapshot {
-  /** The id of the process serving this page. */
+  /** The process serving this page. */
   me: string;
+  /** The name of the build being served. When it changes, the page reloads. */
+  build: string;
   processes: Proc[];
   /** Only messages and facts newer than the ids asked for. */
   messages: Message[];
   events: Fact[];
 }
 
-export async function fetchSnapshot(messagesAfter: number, eventsAfter: number): Promise<Snapshot> {
-  const response = await fetch(`/api/snapshot?messages_after=${messagesAfter}&events_after=${eventsAfter}`);
-  if (!response.ok) throw new Error(await response.text());
+async function answer<T>(response: Response): Promise<T> {
+  if (!response.ok) throw new Error((await response.text()) || response.statusText);
   return response.json();
 }
 
+const post = (path: string, body: unknown) =>
+  fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+
+export async function fetchSnapshot(messagesAfter: number, eventsAfter: number): Promise<Snapshot> {
+  return answer(await fetch(`/api/snapshot?messages_after=${messagesAfter}&events_after=${eventsAfter}`));
+}
+
 export async function send(to: string, text: string): Promise<void> {
-  const response = await fetch('/api/send', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ to, text }),
-  });
-  if (!response.ok) throw new Error(await response.text());
+  await answer(await post('/api/send', { to, text }));
+}
+
+export async function act(action: 'stop' | 'start' | 'remove', who: string): Promise<void> {
+  await answer(await post('/api/act', { action, who }));
+}
+
+/** The names of the files a process has committed. */
+export async function fetchFiles(who: string): Promise<string[]> {
+  const { files } = await answer<{ files: string[] }>(await fetch(`/api/files?who=${encodeURIComponent(who)}`));
+  return files;
+}
+
+export async function fetchFile(who: string, path: string): Promise<{ text: string; cut: boolean }> {
+  return answer(await fetch(`/api/file?who=${encodeURIComponent(who)}&path=${encodeURIComponent(path)}`));
 }
 
 export function clock(ms: number): string {
-  return new Date(ms).toLocaleTimeString([], { hour12: false });
+  return new Date(ms).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit' });
+}
+
+/** `3m ago`, `2h ago`, or the date. */
+export function ago(ms: number, now: number): string {
+  const s = Math.max(0, Math.round((now - ms) / 1000));
+  if (s < 45) return 'just now';
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  return new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+export function money(usd: number | null | undefined): string {
+  if (usd == null) return '';
+  return usd < 10 ? `$${usd.toFixed(2)}` : `$${usd.toFixed(0)}`;
 }
