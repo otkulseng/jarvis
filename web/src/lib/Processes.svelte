@@ -29,7 +29,7 @@
       </span>
       <span class="about">{p.about || 'has not described itself yet'}</span>
       <span class="meta">
-        {p.id} · made by {label(p.parent)} · {p.harness}
+        made by {label(p.parent)} · {p.harness}
         {#if p.has_run}· service{/if}
         {#if p.has_handle}· handler{/if}
         {#if p.state === 'failing'}· {p.failures} failed turn{p.failures === 1 ? '' : 's'} in a row{/if}

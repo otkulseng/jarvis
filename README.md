@@ -1,6 +1,8 @@
 # The page
 
-A small web server and a web page.
+A small web server and a web page. This code is the expert `page`: its
+processes work on their own branches and land finished work on the branch
+`page`.
 
 - `.jarvis/run`: builds the page (`npm ci`, then `svelte-check` and `vite build`),
   builds the server (`cargo build --release`), and starts it. If any step
