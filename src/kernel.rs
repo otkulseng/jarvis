@@ -23,7 +23,9 @@
 //!
 //! The agent is started through a harness adapter, `harness/<name>` in the
 //! repository: it gets the prompt on standard input, runs in the process's
-//! directory, and prints one JSON object {"session", "reply", ...}.
+//! directory, and prints JSON objects, one per line. A line with a `step`
+//! key is something the agent did, and is recorded at once. The last line,
+//! {"session", "reply", ...}, is how the turn ended.
 //!
 //! What the kernel promises, whatever goes wrong:
 //!
@@ -42,7 +44,7 @@ use rusqlite::{Connection, params};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
@@ -151,8 +153,17 @@ fn proc_env(home: &Home, proc: &Proc) -> Vec<(String, String)> {
 }
 
 /// Run one program of a turn to its end, tracked so that it can be ended
-/// from outside, and return what it printed.
-fn run_tracked(job: &Job, conn: Option<&Connection>, kind: &str, mut command: Command, input: &str) -> Result<Output, String> {
+/// from outside, and return what it printed. Each line it prints is shown to
+/// `on_line` as it arrives; the lines `on_line` takes (by returning true) are
+/// left out of what is returned.
+fn run_tracked(
+    job: &Job,
+    conn: Option<&Connection>,
+    kind: &str,
+    mut command: Command,
+    input: &str,
+    on_line: &mut dyn FnMut(&str) -> bool,
+) -> Result<Output, String> {
     if job.cancel.load(Ordering::SeqCst) {
         return Err("interrupted".into());
     }
@@ -175,7 +186,32 @@ fn run_tracked(job: &Job, conn: Option<&Connection>, kind: &str, mut command: Co
     }
     // A program that does not read its input is not an error.
     let _ = child.stdin.take().expect("stdin is piped").write_all(input.as_bytes());
-    let out = child.wait_with_output().map_err(|e| e.to_string());
+    // Its errors are collected on the side, so that it can never be stuck
+    // writing them while its output is being read here.
+    let mut errors = child.stderr.take().expect("stderr is piped");
+    let errors = std::thread::spawn(move || {
+        let mut all = Vec::new();
+        let _ = errors.read_to_end(&mut all);
+        all
+    });
+    let mut stdout = Vec::new();
+    let mut reader = BufReader::new(child.stdout.take().expect("stdout is piped"));
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        match reader.read_until(b'\n', &mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                if !on_line(String::from_utf8_lossy(&line).trim_end()) {
+                    stdout.extend_from_slice(&line);
+                }
+            }
+        }
+    }
+    let out = child
+        .wait()
+        .map(|status| Output { status, stdout, stderr: errors.join().unwrap_or_default() })
+        .map_err(|e| e.to_string());
     // Nothing it started outlives it.
     children::signal(pid, "KILL");
     if let Some(conn) = conn {
@@ -192,7 +228,7 @@ enum Handled {
 
 fn run_handle(job: &Job, conn: Option<&Connection>, mail: &Mail) -> Handled {
     let input = json!({"id": mail.id, "from": mail.from, "body": mail.body, "attempt": mail.attempt}).to_string();
-    match run_tracked(job, conn, "handle", Command::new(job.dir.join(".jarvis/handle")), &input) {
+    match run_tracked(job, conn, "handle", Command::new(job.dir.join(".jarvis/handle")), &input, &mut |_| false) {
         Ok(out) if out.status.success() => Handled::Yes,
         Ok(out) if out.status.code() == Some(3) => Handled::NotMine,
         Ok(out) => Handled::Failed(format!("{}\n{}", out.status, tail(&String::from_utf8_lossy(&out.stderr), 30))),
@@ -206,7 +242,17 @@ fn run_agent(job: &Job, conn: Option<&Connection>, prompt: &str) -> Result<Value
     }
     let mut command = Command::new(&job.harness);
     command.env("JARVIS_SESSION", job.session.as_deref().unwrap_or(""));
-    let out = run_tracked(job, conn, "agent", command, prompt)?;
+    // What the agent does is recorded while it does it.
+    let mut step = |line: &str| match serde_json::from_str::<Value>(line) {
+        Ok(value) if value.get("step").is_some() => {
+            if let Some(conn) = conn {
+                let _ = db::event(conn, &job.id, "step", value);
+            }
+            true
+        }
+        _ => false,
+    };
+    let out = run_tracked(job, conn, "agent", command, prompt, &mut step)?;
     let stdout = String::from_utf8_lossy(&out.stdout);
     if !out.status.success() {
         return Err(format!("harness exited with {}:\n{}\n{}", out.status, tail(&String::from_utf8_lossy(&out.stderr), 30), tail(&stdout, 10)));
@@ -386,7 +432,7 @@ impl Kernel {
     }
 
     fn print_new_events(&mut self) -> Res<()> {
-        for line in crate::event_lines(&self.db, self.last_event, None, &mut self.last_event)? {
+        for line in crate::event_lines(&self.db, self.last_event, None, false, &mut self.last_event)? {
             eprintln!("{line}");
         }
         Ok(())

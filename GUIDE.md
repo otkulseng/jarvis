@@ -25,6 +25,8 @@ examples. Read that before using a command for the first time.
     Write it early and keep it current.
   - your notes: what you learn and want to keep.
   - `.jarvis/run` and `.jarvis/handle`, if you give yourself code (below).
+  - `.jarvis/claude.json`, if your agent is Claude: your own settings, above
+    all the commands you may run (below).
 
   The rest of your directory is the work itself: source code, data, documents.
   Deleting `.jarvis/` must leave an ordinary repository that owes nothing to
@@ -64,6 +66,21 @@ written in anything, and may use `jarvis` themselves.
 Your code does the regular work quickly; you are there for what it cannot do,
 and to improve it. Put build products and other files that should not be
 committed in a `.gitignore`.
+
+## Your tools
+
+Every agent may edit files in its own directory, use `jarvis` and git, and
+search the web. What else you may run depends on your work, and is listed in
+your own directory. For a Claude agent that is `.jarvis/claude.json`, a Claude
+Code settings file:
+
+    {"permissions": {"allow": ["Bash(npm:*)", "Bash(cargo:*)", "Bash(curl:*)"]}}
+
+It is read at the start of each turn. When a command you need is refused, add
+it to the file and send yourself a message saying what to carry on with: you
+have it from your next turn on. A fork starts with the list of the process it came from. Have
+the tools to check your own work (build it, run its tests, look at the
+result) before you tell anyone it is done.
 
 ## Working on the same code as others
 

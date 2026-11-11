@@ -9,7 +9,16 @@ the same for every harness, so the kernel knows nothing about any of them:
        $JARVIS_SESSION       the session to continue, or empty for a new one
        $JARVIS_GUIDE         path to the guide every agent is given
        `jarvis` on $PATH     the command; `jarvis help` describes it
-  out  standard output       one JSON object:
+  out  standard output       JSON objects, one per line.
+                             While the agent works, one line per step, which
+                             the kernel records at once (`jarvis log --steps`):
+                               {"step": what kind of step,
+                                "text": the step, for a person to read,
+                                ...anything else worth recording}
+                             This adapter's kinds are `text` (the agent said
+                             something), `thinking`, `tool` (it used a tool)
+                             and `result` (what came back).
+                             Then, as the last line, how the turn ended:
                                {"session": id to continue next time,
                                 "reply":   what the agent said last,
                                 ...anything else worth recording (cost, time)}
@@ -18,16 +27,32 @@ the same for every harness, so the kernel knows nothing about any of them:
 To support another harness, add another executable next to this one and
 spawn processes with `--harness <its name>`.
 
-What the agent may do is decided here. By default it may edit files in its
-own directory, use the `jarvis` command, use all of git, and search the web.
-Set $JARVIS_CLAUDE_FLAGS to replace these flags (for example
-`--dangerously-skip-permissions` to let agents run any command).
+What the agent may do is decided in two places.
+
+  Every agent     the flags below: edit files in its own directory, use the
+                  `jarvis` command, use all of git, search the web. Set
+                  $JARVIS_CLAUDE_FLAGS to replace them (for example
+                  `--dangerously-skip-permissions` to allow any command).
+  Each process    `.jarvis/claude.json` in the process's directory, if it
+                  exists: a Claude Code settings file. It is how a process is
+                  given the tools its work needs, for example
+                    {"permissions": {"allow": ["Bash(npm:*)", "Bash(cargo:*)"]}}
+                  It is part of the process's code, so forks start with it and
+                  the agent can change it. It is read at the start of each turn.
+
+The settings are handed to Claude Code as text, not as a file. Claude Code
+refuses to let an agent edit a file it was given as settings, and ignores a
+`.claude/settings.json` in a directory nobody has approved by hand.
 """
 import json
 import os
 import shlex
 import subprocess
 import sys
+import tempfile
+
+# The most of a tool's input or output that is recorded for one step.
+MOST = 4000
 
 DEFAULT_FLAGS = [
     "--permission-mode", "acceptEdits",
@@ -42,13 +67,140 @@ LOST = (
 )
 
 
-def claude(prompt, session, guide):
-    command = ["claude", "-p", "--output-format", "json", "--append-system-prompt", guide]
+OWN_SETTINGS = os.path.join(".jarvis", "claude.json")
+
+
+def own_settings():
+    """The process's own settings as text, and a notice if they are unusable."""
+    try:
+        with open(OWN_SETTINGS) as f:
+            text = f.read()
+    except FileNotFoundError:
+        return None, ""
+    except OSError as e:
+        return None, f"[jarvis] `{OWN_SETTINGS}` could not be read ({e}), so it was not used.\n\n"
+    try:
+        if not isinstance(json.loads(text), dict):
+            raise ValueError("it is not a JSON object")
+    except ValueError as e:
+        return None, (
+            f"[jarvis] `{OWN_SETTINGS}` is not valid ({e}), so it was not used this "
+            "turn: you have only the tools every agent has. Fix the file.\n\n"
+        )
+    return text, ""
+
+
+def clip(text):
+    return text if len(text) <= MOST else text[:MOST] + f"\n… ({len(text) - MOST} more characters)"
+
+
+def emit(obj):
+    print(json.dumps(obj), flush=True)
+
+
+def tool_line(name, given):
+    """One line saying what a tool was used for."""
+    here = os.getcwd() + os.sep
+    for key in ("command", "file_path", "pattern", "query", "url", "path", "prompt", "description"):
+        value = given.get(key)
+        if isinstance(value, str) and value:
+            if value.startswith(here):
+                value = value[len(here):]
+            return f"{name}: {value}"
+    return f"{name}: {json.dumps(given)}" if given else name
+
+
+def result_text(content):
+    if isinstance(content, str):
+        return content
+    parts = []
+    for part in content or []:
+        if isinstance(part, dict) and part.get("type") == "text":
+            parts.append(part.get("text", ""))
+        elif isinstance(part, dict):
+            parts.append(f"[{part.get('type', 'something')}]")
+    return "\n".join(parts)
+
+
+def steps(event):
+    """The steps in one line of Claude Code's output."""
+    message = event.get("message")
+    if event.get("type") not in ("assistant", "user") or not isinstance(message, dict):
+        return
+    content = message.get("content")
+    if not isinstance(content, list):
+        return
+    # Set when the step was taken by a helper the agent started with a tool.
+    inside = {"inside": event["parent_tool_use_id"]} if event.get("parent_tool_use_id") else {}
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        kind = part.get("type")
+        if kind == "text" and part.get("text", "").strip():
+            yield {"step": "text", "text": part["text"], **inside}
+        elif kind == "thinking" and part.get("thinking", "").strip():
+            yield {"step": "thinking", "text": part["thinking"], **inside}
+        elif kind == "tool_use":
+            given = part.get("input") or {}
+            yield {
+                "step": "tool",
+                "text": clip(tool_line(part.get("name", "?"), given)),
+                "tool": part.get("name"),
+                "input": json.loads(json.dumps(given)) if len(json.dumps(given)) <= MOST else None,
+                "id": part.get("id"),
+                **inside,
+            }
+        elif kind == "tool_result":
+            yield {
+                "step": "result",
+                "text": clip(result_text(part.get("content"))),
+                "error": bool(part.get("is_error")),
+                "id": part.get("tool_use_id"),
+                **inside,
+            }
+
+
+def claude(prompt, session, guide, settings):
+    """Run one turn, printing its steps as they happen.
+
+    Returns (exit code, the final result Claude Code reported or None, and
+    everything else it printed, for error messages)."""
+    command = ["claude", "-p", "--output-format", "stream-json", "--verbose", "--append-system-prompt", guide]
     if session:
         command += ["--resume", session]
+    if settings:
+        command += ["--settings", settings]
     flags = os.environ.get("JARVIS_CLAUDE_FLAGS")
     command += shlex.split(flags) if flags is not None else DEFAULT_FLAGS
-    return subprocess.run(command, input=prompt, capture_output=True, text=True)
+    result, other = None, []
+    with tempfile.TemporaryFile("w+") as errors:
+        run = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors, text=True)
+        try:
+            run.stdin.write(prompt)
+            run.stdin.close()
+        except BrokenPipeError:
+            pass
+        for line in run.stdout:
+            try:
+                event = json.loads(line)
+            except ValueError:
+                other.append(line)
+                continue
+            if not isinstance(event, dict):
+                other.append(line)
+            elif event.get("type") == "result":
+                result = event
+            else:
+                # Showing a step must never be what ends a turn.
+                try:
+                    for step in steps(event):
+                        emit(step)
+                except Exception as e:
+                    emit({"step": "unreadable", "text": f"a step could not be shown ({e!r})"})
+        code = run.wait()
+        errors.seek(0)
+        other.insert(0, errors.read())
+    return code, result, "".join(other)
 
 
 def main():
@@ -62,21 +214,22 @@ def main():
     if overview.returncode == 0:
         guide += "\n## The `jarvis` command\n\nThis is what `jarvis help` prints:\n\n" + overview.stdout
 
-    done = claude(prompt, session, guide)
+    settings, notice = own_settings()
+    prompt = notice + prompt
+    code, out, said = claude(prompt, session, guide, settings)
     session_lost = False
-    if session and done.returncode != 0 and "No conversation found" in done.stderr + done.stdout:
+    if session and code != 0 and "No conversation found" in said + json.dumps(out or {}):
         session_lost = True
-        done = claude(LOST + prompt, None, guide)
+        code, out, said = claude(LOST + prompt, None, guide, settings)
 
-    try:
-        out = json.loads(done.stdout)
-    except ValueError:
-        out = None
-    if done.returncode != 0 or out is None or out.get("is_error"):
-        sys.stderr.write(done.stderr or done.stdout or "claude produced no output\n")
-        sys.exit(done.returncode or 1)
+    if code != 0 or out is None or out.get("is_error"):
+        problem = said.strip()
+        if out and out.get("is_error"):
+            problem = f"{out.get('result') or json.dumps(out)}\n{problem}"
+        sys.stderr.write(problem or "claude produced no output\n")
+        sys.exit(code or 1)
 
-    print(json.dumps({
+    emit({
         "session": out.get("session_id"),
         "reply": out.get("result") or "",
         "harness": "claude",
@@ -84,7 +237,7 @@ def main():
         "duration_ms": out.get("duration_ms"),
         "turns": out.get("num_turns"),
         "session_lost": session_lost,
-    }))
+    })
 
 
 if __name__ == "__main__":

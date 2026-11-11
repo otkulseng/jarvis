@@ -27,6 +27,10 @@ work. `thoughts.md` says why; this says how.
 - **`harness/`**: one adapter per agent harness. `harness/claude` runs Claude
   Code and decides what its agents may do: by default, edit their own
   directory, use `jarvis`, use all of git, and search the web.
+  A process adds the tools its own work needs (`npm`, `cargo`, `sbatch`) in
+  `.jarvis/claude.json` in its directory, which forks inherit.
+  The adapter also reports each step its agent takes (what it says, the tools
+  it uses, what comes back) while the turn runs: `jarvis log -fs` shows them.
 - **The page** is not here. It is a branch of its own, `tree/page`: an Axum
   server with a Svelte and TypeScript page, which a process can be started
   from. Nothing on `main` knows about it.

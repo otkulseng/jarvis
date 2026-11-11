@@ -196,6 +196,7 @@ pub enum Cmd {
     #[command(after_long_help = "Examples:\n\
         \x20 jarvis log                 the last 30 facts\n\
         \x20 jarvis log -f              keep printing as things happen (Ctrl-C to leave)\n\
+        \x20 jarvis log -fs page        watch what page's agent is doing, step by step\n\
         \x20 jarvis log lammps -n 100   the last 100 about lammps\n\
         \x20 jarvis log --json          for programs: every field of every fact")]
     Log(Log),
@@ -316,6 +317,11 @@ pub struct Log {
     /// Keep running and print new facts as they happen
     #[arg(short = 'f', long)]
     pub follow: bool,
+
+    /// Also show each step agents take inside their turns: what they say,
+    /// the tools they use, and what comes back
+    #[arg(short = 's', long)]
+    pub steps: bool,
 
     /// Print JSON instead of text
     #[arg(long)]

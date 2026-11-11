@@ -573,16 +573,19 @@ fn show(args: cli::Show) -> Res<()> {
 
 /// Facts are about one process when it did them, or when they are a message to it.
 const ABOUT_PROC: &str = "(?2 IS NULL OR proc = ?2 OR (kind = 'send' AND json_extract(data, '$.to') = ?2))";
+/// A step is something an agent did inside a turn. There are many, so they
+/// are shown only when asked for.
+const STEPS: &str = "(?3 OR kind != 'step')";
 
 /// Facts after `after` (only those about `who`, if given), as lines for a
 /// terminal. `last` is moved to the newest fact seen.
-pub fn event_lines(conn: &Connection, after: i64, who: Option<&str>, last: &mut i64) -> Res<Vec<String>> {
+pub fn event_lines(conn: &Connection, after: i64, who: Option<&str>, steps: bool, last: &mut i64) -> Res<Vec<String>> {
     let mut stmt = conn.prepare_cached(&format!(
         "SELECT id, strftime('%H:%M:%S', at / 1000, 'unixepoch', 'localtime'), proc, kind, data
-         FROM events WHERE id > ?1 AND {ABOUT_PROC} ORDER BY id"
+         FROM events WHERE id > ?1 AND {ABOUT_PROC} AND {STEPS} ORDER BY id"
     ))?;
     let rows: Vec<(i64, String, String, String, String)> = stmt
-        .query_map(params![after, who], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
+        .query_map(params![after, who, steps], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
         .collect::<Result<_, _>>()?;
     let mut lines = Vec::new();
     for (id, time, proc, kind, data) in rows {
@@ -617,6 +620,7 @@ pub fn event_lines(conn: &Connection, after: i64, who: Option<&str>, last: &mut 
             "run_start" => "service started (.jarvis/run)".to_string(),
             "run_exit" => format!("service exited (.jarvis/run): {}", text("status")),
             "kernel_error" => format!("KERNEL PROBLEM: {}", clip(&text("error"), 200)),
+            "step" => format!("  · {:<8} {}", text("step"), clip(&text("text"), 160)),
             other if d == json!({}) => other.to_string(),
             other => format!("{other} {}", clip(&data, 160)),
         };
@@ -635,15 +639,15 @@ fn log(args: cli::Log) -> Res<()> {
     let count = args.count.unwrap_or(if args.json { 500 } else { 30 });
     // Start just before the oldest of the newest `count` facts.
     let window: i64 = conn.query_row(
-        &format!("SELECT COALESCE(MIN(id), 0) - 1 FROM (SELECT id FROM events WHERE id > ?1 AND {ABOUT_PROC} ORDER BY id DESC LIMIT ?3)"),
-        params![args.after.unwrap_or(0), who, count],
+        &format!("SELECT COALESCE(MIN(id), 0) - 1 FROM (SELECT id FROM events WHERE id > ?1 AND {ABOUT_PROC} AND {STEPS} ORDER BY id DESC LIMIT ?4)"),
+        params![args.after.unwrap_or(0), who, args.steps, count],
         |r| r.get(0),
     )?;
     let mut last = window.max(args.after.unwrap_or(0));
     if args.json {
-        let mut stmt = conn.prepare(&format!("SELECT id, at, proc, kind, data FROM events WHERE id > ?1 AND {ABOUT_PROC} ORDER BY id"))?;
+        let mut stmt = conn.prepare(&format!("SELECT id, at, proc, kind, data FROM events WHERE id > ?1 AND {ABOUT_PROC} AND {STEPS} ORDER BY id"))?;
         let rows: Vec<Value> = stmt
-            .query_map(params![last, who], |r| {
+            .query_map(params![last, who, args.steps], |r| {
                 let data: String = r.get(4)?;
                 Ok(json!({
                     "id": r.get::<_, i64>(0)?, "at": r.get::<_, i64>(1)?, "proc": r.get::<_, String>(2)?,
@@ -657,7 +661,7 @@ fn log(args: cli::Log) -> Res<()> {
     let mut printed = false;
     loop {
         let after = last;
-        for line in event_lines(&conn, after, who, &mut last)? {
+        for line in event_lines(&conn, after, who, args.steps, &mut last)? {
             println!("{line}");
             printed = true;
         }
