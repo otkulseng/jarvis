@@ -63,17 +63,16 @@ export interface StepData {
   id?: string;
 }
 
-export const isStep = (fact: Fact) => fact.kind === 'step';
-
-export interface Snapshot {
-  /** The process serving this page. */
-  me: string;
-  /** The name of the build being served. When it changes, the page reloads. */
-  build: string;
-  processes: Proc[];
-  /** Only messages and facts newer than the ids asked for. */
-  messages: Message[];
-  events: Fact[];
+/** How much two have written to each other. `a` comes before `b` in the alphabet. */
+export interface Edge {
+  a: string;
+  b: string;
+  count: number;
+  /** `count` without what jarvis wrote on someone's behalf ("you have just been created"). */
+  talk: number;
+  /** Messages on it that have not been dealt with yet. */
+  waiting: number;
+  last_at: number;
 }
 
 async function answer<T>(response: Response): Promise<T> {
@@ -84,8 +83,24 @@ async function answer<T>(response: Response): Promise<T> {
 const post = (path: string, body: unknown) =>
   fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
-export async function fetchSnapshot(messagesAfter: number, eventsAfter: number): Promise<Snapshot> {
-  return answer(await fetch(`/api/snapshot?messages_after=${messagesAfter}&events_after=${eventsAfter}`));
+/** The messages of a topic before message `before`. */
+export async function fetchOlder(topic: string, before: number): Promise<{ messages: Message[]; more: boolean }> {
+  return answer(await fetch(`/api/older?topic=${encodeURIComponent(topic)}&before=${before}`));
+}
+
+/** The steps an agent took between two facts: a turn's start and its end. */
+export async function fetchSteps(who: string, after: number, before: number | null): Promise<Fact[]> {
+  const until = before == null ? '' : `&before=${before}`;
+  const { steps } = await answer<{ steps: Fact[] }>(await fetch(`/api/steps?who=${encodeURIComponent(who)}&after=${after}${until}`));
+  return steps;
+}
+
+export async function fetchPositions(): Promise<Record<string, [number, number, number]>> {
+  return answer(await fetch('/api/positions'));
+}
+
+export function savePositions(positions: Record<string, [number, number, number]>): void {
+  void post('/api/positions', positions).catch(() => {});
 }
 
 export async function send(to: string, text: string): Promise<void> {

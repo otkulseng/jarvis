@@ -7,13 +7,12 @@
   import Composer from './Composer.svelte';
   import Notes from './Notes.svelte';
   import StatePill from './StatePill.svelte';
-  import { go, href, store, toProcess, type Tab } from './store.svelte';
+  import { go, href, processTopic, store, toProcess, type Tab } from './live/store.svelte';
   import Thread from './Thread.svelte';
 
   let { name, tab, path }: { name: string; tab: Tab; path: string } = $props();
 
   const proc = $derived(store.byName.get(name));
-  const messages = $derived(store.messages.filter((m) => m.from === name || m.to === name));
   const isMe = $derived(name === store.me);
 
   let confirming = $state(false);
@@ -22,7 +21,7 @@
 
   // Reading the conversation is reading what it wrote.
   $effect(() => {
-    store.messages.length;
+    store.unread.length;
     if (tab === 'chat') store.markRead(name);
   });
 
@@ -113,7 +112,7 @@
     {:else if tab === 'activity'}
       <Activity {name} />
     {:else}
-      <Thread {messages} turnsOf={name} empty="Nothing has been said to {name} yet." />
+      <Thread topic={processTopic(name)} turnsOf={name} empty="Nothing has been said to {name} yet." />
       <Composer to={name} placeholder="Message {name}" hint={proc.state === 'stopped' ? `${name} is stopped: it reads this when it is started.` : ''} />
     {/if}
   {:else if store.loaded}

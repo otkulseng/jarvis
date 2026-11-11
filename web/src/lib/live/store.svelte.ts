@@ -1,0 +1,411 @@
+// Everything the page knows, in one place: who exists, the lines between
+// them, the conversations that are open, where the reader is, and what they
+// have read.
+//
+// What is new arrives as frames (see `feed.ts`; the server's `model.rs` lists
+// them). Each kind of frame has exactly one handler, in `handlers` below. To
+// make the page react to something new, add a handler there; a frame of a
+// kind nobody handles is ignored.
+//
+// The page does not keep history. It keeps what is on screen: the map, the
+// inbox, and the threads that are open. Earlier messages and the steps of
+// earlier turns are fetched when the reader asks for them.
+
+import { fetchOlder, fetchSteps, type Edge, type Fact, type Message, type Proc } from '../api';
+import { openFeed, type Feed, type Frame } from './feed';
+
+export const HUMAN = 'human';
+export const KERNEL = 'kernel';
+
+export type Tab = 'chat' | 'notes' | 'activity';
+export type Route =
+  | { view: 'map' }
+  | { view: 'inbox' }
+  | { view: 'process'; name: string; tab: Tab; path: string }
+  | { view: 'edge'; a: string; b: string };
+
+const TABS: Tab[] = ['chat', 'notes', 'activity'];
+
+function parse(hash: string): Route {
+  const parts = hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
+  if (parts[0] === 'p' && parts[1]) {
+    const tab = TABS.find((t) => t === parts[2]) ?? 'chat';
+    return { view: 'process', name: parts[1], tab, path: parts.slice(3).join('/') };
+  }
+  if (parts[0] === 'e' && parts[1] && parts[2]) return { view: 'edge', a: parts[1], b: parts[2] };
+  if (parts[0] === 'inbox') return { view: 'inbox' };
+  return { view: 'map' };
+}
+
+/** The address of a place in the page. */
+export function href(route: Route): string {
+  const enc = encodeURIComponent;
+  switch (route.view) {
+    case 'process': {
+      const path = route.path ? '/' + route.path.split('/').map(enc).join('/') : '';
+      return `#/p/${enc(route.name)}/${route.tab}${path}`;
+    }
+    case 'edge':
+      return `#/e/${enc(route.a)}/${enc(route.b)}`;
+    case 'inbox':
+      return '#/inbox';
+    default:
+      return '#/';
+  }
+}
+
+export function go(route: Route) {
+  location.hash = href(route);
+}
+
+export const toProcess = (name: string, tab: Tab = 'chat', path = ''): Route => ({ view: 'process', name, tab, path });
+
+function remembered<T>(key: string, otherwise: T): T {
+  try {
+    const text = localStorage.getItem(key);
+    return text == null ? otherwise : (JSON.parse(text) as T);
+  } catch {
+    return otherwise;
+  }
+}
+
+function remember(key: string, value: unknown) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Not being able to remember is not worth an error.
+  }
+}
+
+export const edgeKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+export const processTopic = (name: string) => `process:${name}`;
+export const edgeTopic = (a: string, b: string) => `edge:${edgeKey(a, b)}`;
+
+/** An open conversation: what the reader sees of a topic. */
+export interface Thread {
+  /** Oldest first. */
+  messages: Message[];
+  /** Facts about a process (not steps), oldest first. */
+  facts: Fact[];
+  /** Steps of the turns that are loaded, oldest first. */
+  steps: Fact[];
+  /** There are earlier messages than these. */
+  more: boolean;
+  /** Its history has arrived. */
+  loaded: boolean;
+  problem: string;
+}
+
+const NOTHING: Thread = { messages: [], facts: [], steps: [], more: false, loaded: false, problem: '' };
+
+/** The most of each kind that is kept for one open thread. */
+const MOST = { messages: 600, facts: 800, steps: 6000 };
+
+/** A list kept in order of `id`, with each id in it once. */
+class Ordered<T extends { id: number }> {
+  list: T[] = [];
+  private at = new Map<number, T>();
+
+  /** Add or replace. Returns whether the list changed in a way a reader could see. */
+  put(item: T, most: number): void {
+    const had = this.at.has(item.id);
+    this.at.set(item.id, item);
+    if (had) {
+      this.list[this.list.findIndex((i) => i.id === item.id)] = item;
+    } else if (!this.list.length || item.id > this.list[this.list.length - 1].id) {
+      this.list.push(item);
+    } else {
+      this.list.splice(this.list.findIndex((i) => i.id > item.id), 0, item);
+    }
+    if (this.list.length > most) {
+      for (const dropped of this.list.splice(0, this.list.length - most)) this.at.delete(dropped.id);
+    }
+  }
+}
+
+/** A thread while frames are being applied to it; `Thread` is what is shown. */
+class Working {
+  messages = new Ordered<Message>();
+  facts = new Ordered<Fact>();
+  steps = new Ordered<Fact>();
+  more = false;
+  loaded = false;
+  problem = '';
+
+  shown(): Thread {
+    return {
+      messages: [...this.messages.list],
+      facts: [...this.facts.list],
+      steps: [...this.steps.list],
+      more: this.more,
+      loaded: this.loaded,
+      problem: this.problem,
+    };
+  }
+}
+
+type Handler = (store: Store, frame: any) => void;
+
+/**
+ * One handler per kind of frame. This table is the whole of how the page
+ * reacts to what happens in jarvis.
+ */
+const handlers: Record<string, Handler> = {
+  /** The stream has (re)started: the whole map follows. */
+  hello(store, frame) {
+    // A new build of the page is being served: become it.
+    if (store.build !== null && frame.build !== store.build) {
+      location.reload();
+      return;
+    }
+    store.build = frame.build;
+    store.me = frame.me;
+    store.work.processes.clear();
+    store.work.edges.clear();
+    store.changed.map = true;
+    store.loaded = true;
+    store.subscribe();
+  },
+  process(store, frame) {
+    store.work.processes.set(frame.process.id, frame.process);
+    store.changed.map = true;
+  },
+  gone(store, frame) {
+    store.work.processes.delete(frame.name);
+    for (const [key, edge] of store.work.edges) {
+      if (edge.a === frame.name || edge.b === frame.name) store.work.edges.delete(key);
+    }
+    store.changed.map = true;
+  },
+  edge(store, frame) {
+    store.work.edges.set(edgeKey(frame.edge.a, frame.edge.b), frame.edge);
+    store.changed.map = true;
+  },
+  /** A message went from one to another: the map shows it travelling. */
+  pulse(store, frame) {
+    for (const listener of store.pulseListeners) listener(frame.from, frame.to);
+  },
+  /** A new message, or a message whose status changed. */
+  message(store, frame) {
+    for (const topic of frame.topics as string[]) {
+      const thread = store.work.threads.get(topic);
+      if (!thread) continue;
+      thread.messages.put(frame.message, MOST.messages);
+      store.changed.threads.add(topic);
+    }
+  },
+  /** Something the kernel recorded about a process; a step is one too. */
+  fact(store, frame) {
+    for (const topic of frame.topics as string[]) {
+      const thread = store.work.threads.get(topic);
+      if (!thread) continue;
+      if (frame.fact.kind === 'step') thread.steps.put(frame.fact, MOST.steps);
+      else thread.facts.put(frame.fact, MOST.facts);
+      store.changed.threads.add(topic);
+    }
+  },
+  /** The history of a topic that was just opened. */
+  thread(store, frame) {
+    const thread = store.work.threads.get(frame.topic);
+    if (!thread) return;
+    for (const message of frame.messages as Message[]) thread.messages.put(message, MOST.messages);
+    for (const fact of frame.facts as Fact[]) {
+      if (fact.kind === 'step') thread.steps.put(fact, MOST.steps);
+      else thread.facts.put(fact, MOST.facts);
+    }
+    thread.more = Boolean(frame.more);
+    thread.problem = frame.problem ?? '';
+    thread.loaded = true;
+    store.changed.threads.add(frame.topic);
+  },
+};
+
+class Store {
+  me = $state('');
+  online = $state(false);
+  loaded = $state(false);
+  now = $state(Date.now());
+  route = $state<Route>(parse(location.hash));
+  dockOpen = $state(remembered('jarvis.dock', true));
+
+  // What is shown. Replaced as a whole, once per batch of frames.
+  processes = $state.raw<Proc[]>([]);
+  edges = $state.raw<Edge[]>([]);
+  threads = $state.raw<Record<string, Thread>>({});
+
+  // What frames are applied to, and what they changed. Only handlers touch these.
+  work = { processes: new Map<string, Proc>(), edges: new Map<string, Edge>(), threads: new Map<string, Working>() };
+  changed = { map: false, threads: new Set<string>() };
+  build: string | null = null;
+  pulseListeners = new Set<(from: string, to: string) => void>();
+
+  /** For each sender, the newest message to the human that has been read. */
+  private seen = $state<Record<string, number>>(remembered('jarvis.seen', {}));
+  /** Everything up to this message counts as read (set the first time the page is opened). */
+  private seenAll = $state<number | null>(remembered<number | null>('jarvis.seenAll', null));
+  private feed: Feed | null = null;
+
+  byName = $derived(new Map(this.processes.map((p) => [p.id, p])));
+
+  /** Messages to the human that have not been read, newest last. */
+  unread = $derived(this.thread('inbox').messages.filter((m) => this.isUnread(m)));
+
+  totalCost = $derived(this.processes.reduce((sum, p) => sum + (p.cost_usd ?? 0), 0));
+
+  thread(topic: string): Thread {
+    return this.threads[topic] ?? NOTHING;
+  }
+
+  exists(address: string): boolean {
+    return address === HUMAN || this.byName.has(address);
+  }
+
+  label(address: string): string {
+    return address === HUMAN ? 'you' : address;
+  }
+
+  isUnread(m: Message): boolean {
+    return m.to === HUMAN && m.id > (this.seenAll ?? Infinity) && m.id > (this.seen[m.from] ?? 0);
+  }
+
+  unreadFrom(sender: string): number {
+    return this.unread.filter((m) => m.from === sender).length;
+  }
+
+  /** The reader has looked at what `sender` wrote to them. */
+  markRead(sender: string) {
+    const newest = this.thread('inbox').messages.findLast((m) => m.from === sender);
+    if (!newest || (this.seen[sender] ?? 0) >= newest.id) return;
+    this.seen = { ...this.seen, [sender]: newest.id };
+    remember('jarvis.seen', this.seen);
+  }
+
+  markAllRead() {
+    this.seenAll = this.thread('inbox').messages.at(-1)?.id ?? 0;
+    remember('jarvis.seenAll', this.seenAll);
+  }
+
+  toggleDock(open = !this.dockOpen) {
+    this.dockOpen = open;
+    remember('jarvis.dock', open);
+  }
+
+  /** Be told whenever a message goes from one to another. Returns how to stop. */
+  onPulse(listener: (from: string, to: string) => void): () => void {
+    this.pulseListeners.add(listener);
+    return () => this.pulseListeners.delete(listener);
+  }
+
+  /** Fetch the messages before the ones shown. */
+  async loadOlder(topic: string) {
+    const first = this.thread(topic).messages[0];
+    if (!first) return;
+    const { messages, more } = await fetchOlder(topic, first.id);
+    const thread = this.work.threads.get(topic);
+    if (!thread) return;
+    for (const message of messages) thread.messages.put(message, MOST.messages + messages.length);
+    thread.more = more;
+    this.changed.threads.add(topic);
+    this.publish();
+  }
+
+  /** Fetch what an agent did in an earlier turn (between two facts). */
+  async loadSteps(who: string, after: number, before: number | null) {
+    const steps = await fetchSteps(who, after, before);
+    const thread = this.work.threads.get(processTopic(who));
+    if (!thread) return;
+    for (const step of steps) thread.steps.put(step, MOST.steps);
+    this.changed.threads.add(processTopic(who));
+    this.publish();
+  }
+
+  /** In words, for the page's agent: what the reader is looking at. */
+  lookingAt(): string {
+    const r = this.route;
+    switch (r.view) {
+      case 'process':
+        if (r.tab === 'notes') return `the files of process ${r.name}${r.path ? `, file ${r.path}` : ''}`;
+        return r.tab === 'activity' ? `the activity of process ${r.name}` : `the conversation with process ${r.name}`;
+      case 'edge':
+        return `the messages between ${r.a} and ${r.b}`;
+      case 'inbox':
+        return 'the inbox';
+      default:
+        return 'the map';
+    }
+  }
+
+  /** The topics the page needs now: what is on screen, the inbox, and the page's own conversation. */
+  private wanted(): string[] {
+    const topics = ['inbox'];
+    if (this.me) topics.push(processTopic(this.me));
+    const r = this.route;
+    if (r.view === 'process') topics.push(processTopic(r.name));
+    if (r.view === 'edge') topics.push(edgeTopic(r.a, r.b));
+    return [...new Set(topics)];
+  }
+
+  /** Ask the server for what is needed now, and let go of what no longer is. */
+  subscribe() {
+    const wanted = this.wanted();
+    for (const topic of wanted) {
+      if (!this.work.threads.has(topic)) this.work.threads.set(topic, new Working());
+    }
+    for (const topic of [...this.work.threads.keys()]) {
+      if (!wanted.includes(topic)) {
+        this.work.threads.delete(topic);
+        this.changed.threads.add(topic);
+      }
+    }
+    this.feed?.topics(wanted);
+    this.publish();
+  }
+
+  /** Show what the handlers changed. */
+  private publish() {
+    if (this.changed.map) {
+      this.processes = [...this.work.processes.values()];
+      this.edges = [...this.work.edges.values()];
+      this.changed.map = false;
+    }
+    if (this.changed.threads.size) {
+      const threads = { ...this.threads };
+      for (const topic of this.changed.threads) {
+        const thread = this.work.threads.get(topic);
+        if (thread) threads[topic] = thread.shown();
+        else delete threads[topic];
+      }
+      this.threads = threads;
+      this.changed.threads.clear();
+      // The first time the page is ever opened, what is already there is not news.
+      if (this.seenAll === null && this.thread('inbox').loaded) this.markAllRead();
+    }
+  }
+
+  private take(frames: Frame[]) {
+    for (const frame of frames) handlers[frame.type]?.(this, frame);
+    this.publish();
+  }
+
+  /** Stay up to date for as long as the page is open. */
+  start(): () => void {
+    const onhash = () => {
+      this.route = parse(location.hash);
+      this.subscribe();
+    };
+    window.addEventListener('hashchange', onhash);
+    const tick = setInterval(() => (this.now = Date.now()), 1000);
+    this.feed = openFeed(
+      (frames) => this.take(frames),
+      (is) => (this.online = is),
+    );
+    this.subscribe();
+    return () => {
+      clearInterval(tick);
+      window.removeEventListener('hashchange', onhash);
+      this.feed?.close();
+    };
+  }
+}
+
+export const store = new Store();

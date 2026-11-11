@@ -4,7 +4,7 @@
   // between notes can be followed.
   import { fetchFile, fetchFiles } from './api';
   import { document as render } from './markdown';
-  import { go, store, toProcess } from './store.svelte';
+  import { go, processTopic, store, toProcess } from './live/store.svelte';
 
   let { name, path }: { name: string; path: string } = $props();
 
@@ -17,7 +17,7 @@
   let filter = $state('');
 
   /** Changes whenever the process commits, so that what is shown is what is there. */
-  const version = $derived(store.facts.findLast((f) => f.proc === name && f.kind === 'commit')?.id ?? 0);
+  const version = $derived(store.thread(processTopic(name)).facts.findLast((f) => f.kind === 'commit')?.id ?? 0);
 
   $effect(() => {
     version;

@@ -1,11 +1,11 @@
 <script lang="ts">
   // What the kernel recorded about one process, oldest first.
   import { clock, type Fact } from './api';
-  import { store } from './store.svelte';
+  import { processTopic, store } from './live/store.svelte';
 
   let { name }: { name: string } = $props();
 
-  const facts = $derived(store.facts.filter((f) => f.proc === name));
+  const facts = $derived(store.thread(processTopic(name)).facts);
   const text = (value: unknown) => (typeof value === 'string' ? value : '');
   const firstLine = (value: unknown) => text(value).split('\n').find((line) => line.trim()) ?? '';
   const BAD = new Set(['turn_failed', 'run_exit', 'kernel_error', 'commit_failed']);

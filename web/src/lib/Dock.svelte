@@ -4,14 +4,13 @@
   // looking at, so that "this looks wrong" says what "this" is.
   import Composer from './Composer.svelte';
   import StatePill from './StatePill.svelte';
-  import { href, store, toProcess } from './store.svelte';
+  import { href, processTopic, store, toProcess } from './live/store.svelte';
   import Thread from './Thread.svelte';
 
   const me = $derived(store.byName.get(store.me));
-  const messages = $derived(store.messages.filter((m) => m.from === store.me || m.to === store.me));
 
   $effect(() => {
-    store.messages.length;
+    store.unread.length;
     if (store.me) store.markRead(store.me);
   });
 </script>
@@ -33,7 +32,7 @@
     </button>
   </header>
   {#if me}
-    <Thread {messages} turnsOf={store.me} empty="Tell the page what you want: something to get done, or something on this page to change." />
+    <Thread topic={processTopic(store.me)} turnsOf={store.me} empty="Tell the page what you want: something to get done, or something on this page to change." />
     <Composer to={store.me} placeholder="Ask the page" hint="It is told what you are looking at." context={() => store.lookingAt()} />
   {:else if store.loaded}
     <p class="none">This page is not being served by a jarvis process, so there is nobody behind it to talk to.</p>

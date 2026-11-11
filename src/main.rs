@@ -1,34 +1,48 @@
-//! The server behind the web page. It serves the built page and answers the
-//! page's questions, all by running the `jarvis` command. It keeps no state.
+//! The server behind the web page. It is the one place that understands
+//! jarvis: it follows `jarvis watch`, keeps the current picture (`model.rs`),
+//! and tells each open browser what changed in what that browser is showing
+//! (`hub.rs`). Browsers only draw.
 //!
-//!   GET  /api/snapshot?messages_after=N&events_after=M
-//!        who exists, and the messages and facts newer than the given ids
-//!        (facts include every step agents take inside their turns), and
-//!        which build of the page this server is serving
-//!   POST /api/send   {"to": ..., "text": ...}       a message from the human
+//!   jarvis watch ──▶ model.rs (what a change means) ──▶ hub.rs (batches) ──▶ browsers
+//!
+//!   GET  /api/stream?topics=T1,T2    what changes, pushed as it happens
+//!        (server-sent events; each event is a JSON list of frames). `map`
+//!        and `inbox` are always included. Frames and topics: `model.rs`.
+//!   GET  /api/older?topic=T&before=N           earlier messages of a topic
+//!   GET  /api/steps?who=NAME&after=A&before=B  the steps of an earlier turn
+//!   POST /api/send   {"to": ..., "text": ...}  a message from the human
 //!   POST /api/act    {"action": "stop" | "start" | "remove", "who": ...}
-//!   GET  /api/files?who=NAME                         the files of a process
-//!   GET  /api/file?who=NAME&path=PATH                one of them, as text
+//!   GET  /api/files?who=NAME                   the files of a process
+//!   GET  /api/file?who=NAME&path=PATH          one of them, as text
+//!   GET, POST /api/positions                   where the reader put the nodes of the map
 //!
 //! Set by `.jarvis/run`: $PAGE_DIST (the built page, default `web/dist`) and
-//! $PAGE_BUILD (the name of this build; the open page reloads itself when it
-//! changes).
+//! $PAGE_BUILD (the name of this build; an open page reloads itself when it
+//! is served by a different one).
 //!
 //! The port: $PORT if set. Otherwise the one this process used last time
 //! (`.build/port`), and the first time, the first free one from 7878 up. So
 //! the first page process gets 7878 and keeps it, and others get their own.
 
-use axum::extract::Query;
+mod hub;
+mod jarvis;
+mod model;
+mod threads;
+
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use hub::Hub;
 use serde_json::{Value, json};
-use std::collections::HashMap;
-use std::process::Stdio;
+use std::collections::{HashMap, HashSet};
+use std::convert::Infallible;
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
-use tokio::process::Command;
+use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::{Stream, StreamExt};
 use tower_http::services::ServeDir;
 
 type Failure = (StatusCode, String);
@@ -36,8 +50,11 @@ type Params = Query<HashMap<String, String>>;
 
 const FIRST_PORT: u16 = 7878;
 const PORT_FILE: &str = ".build/port";
+const POSITIONS_FILE: &str = ".build/positions.json";
 /// The most of one file that is sent to the page.
 const MOST: usize = 400_000;
+/// How often what has changed is sent on to the browsers.
+const BATCH_EVERY: Duration = Duration::from_millis(80);
 
 fn fail(text: impl Into<String>) -> Failure {
     (StatusCode::INTERNAL_SERVER_ERROR, text.into())
@@ -47,51 +64,77 @@ fn bad(text: impl Into<String>) -> Failure {
     (StatusCode::BAD_REQUEST, text.into())
 }
 
-/// Run `jarvis` with the given arguments (and optional standard input) and
-/// return what it printed. `as_human`: the command is the human's doing, not
-/// this process's.
-async fn jarvis(args: &[&str], input: Option<&str>, as_human: bool) -> Result<String, Failure> {
-    let mut command = Command::new("jarvis");
-    command.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    if as_human {
-        command.env_remove("JARVIS_ID");
-    }
-    let mut child = command.spawn().map_err(|e| fail(format!("could not run jarvis: {e}")))?;
-    let mut stdin = child.stdin.take().expect("stdin is piped");
-    if let Some(input) = input {
-        stdin.write_all(input.as_bytes()).await.map_err(|e| fail(e.to_string()))?;
-    }
-    drop(stdin);
-    let out = child.wait_with_output().await.map_err(|e| fail(e.to_string()))?;
-    if !out.status.success() {
-        return Err(fail(String::from_utf8_lossy(&out.stderr).trim().trim_start_matches("jarvis: ").to_string()));
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-}
-
-async fn jarvis_json(args: &[&str]) -> Result<Value, Failure> {
-    let text = jarvis(args, None, false).await?;
-    serde_json::from_str(&text).map_err(|e| fail(format!("jarvis printed bad JSON: {e}")))
-}
-
 fn me() -> String {
     std::env::var("JARVIS_ID").unwrap_or_default()
 }
 
-async fn snapshot(Query(q): Params) -> Result<Json<Value>, Failure> {
-    let after = |key: &str| q.get(key).and_then(|v| v.parse::<i64>().ok()).unwrap_or(0).to_string();
-    let (messages_after, events_after) = (after("messages_after"), after("events_after"));
-    let messages_args = ["messages", "--json", "--after", messages_after.as_str()];
-    let events_args = ["log", "--json", "--steps", "--after", events_after.as_str()];
-    let (processes, messages, events) =
-        tokio::try_join!(jarvis_json(&["ps", "--json"]), jarvis_json(&messages_args), jarvis_json(&events_args))?;
-    Ok(Json(json!({
+/// Follow jarvis for as long as the server runs.
+async fn follow(hub: Arc<Hub>) {
+    let (lines, mut changes) = tokio::sync::mpsc::channel(1024);
+    tokio::spawn(jarvis::watch(lines));
+    while let Some(change) = changes.recv().await {
+        // `ready`: the feed has (again) said how things stand. Count from there.
+        if change["kind"] == "ready" {
+            let pairs = jarvis::list(&["messages", "--pairs", "--json"]).await;
+            let waiting = jarvis::list(&["messages", "--waiting", "--json", "-n", "100000"]).await;
+            match (pairs, waiting) {
+                (Ok(pairs), Ok(waiting)) => hub.load(&pairs, &waiting),
+                (Err(e), _) | (_, Err(e)) => eprintln!("could not read the messages: {e}"),
+            }
+        }
+        hub.apply(&change);
+    }
+}
+
+async fn stream(State(hub): State<Arc<Hub>>, Query(q): Params) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let asked: Vec<String> = q.get("topics").map(|t| t.split(',').filter(|t| !t.is_empty()).map(String::from).collect()).unwrap_or_default();
+    let mut topics: HashSet<String> = asked.iter().cloned().collect();
+    topics.extend(["map".to_string(), "inbox".to_string()]);
+    let hello = json!({
+        "type": "hello",
         "me": me(),
         "build": std::env::var("PAGE_BUILD").unwrap_or_else(|_| "dev".into()),
-        "processes": processes,
-        "messages": messages,
-        "events": events,
-    })))
+    });
+    let (first, sender, receiver) = hub.connect(topics.clone(), hello);
+    // The history of what it opened follows, as soon as jarvis has given it.
+    tokio::spawn(async move {
+        for topic in topics.iter().filter(|topic| *topic != "map") {
+            let thread = threads::open(topic).await;
+            if sender.send(json!([thread]).to_string()).await.is_err() {
+                return;
+            }
+        }
+    });
+    let batches = tokio_stream::once(first).chain(ReceiverStream::new(receiver));
+    Sse::new(batches.map(|batch| Ok(Event::default().data(batch)))).keep_alive(KeepAlive::default())
+}
+
+async fn older(Query(q): Params) -> Result<Json<Value>, Failure> {
+    let topic = q.get("topic").ok_or_else(|| bad("need `topic`"))?;
+    let before = q.get("before").and_then(|b| b.parse::<i64>().ok());
+    let messages = threads::messages(topic, before).await.map_err(fail)?;
+    Ok(Json(json!({"more": messages.len() >= threads::PAGE, "messages": messages})))
+}
+
+async fn steps(Query(q): Params) -> Result<Json<Value>, Failure> {
+    let who = q.get("who").ok_or_else(|| bad("need `who`"))?;
+    let number = |key: &str| q.get(key).and_then(|v| v.parse::<i64>().ok());
+    let steps = threads::steps(who, number("after").unwrap_or(0), number("before")).await.map_err(fail)?;
+    Ok(Json(json!({ "steps": steps })))
+}
+
+async fn positions() -> Json<Value> {
+    let saved = tokio::fs::read_to_string(POSITIONS_FILE).await.ok().and_then(|text| serde_json::from_str(&text).ok());
+    Json(saved.unwrap_or_else(|| json!({})))
+}
+
+async fn save_positions(Json(positions): Json<Value>) -> Result<Json<Value>, Failure> {
+    if !positions.is_object() {
+        return Err(bad("need an object of positions"));
+    }
+    let _ = tokio::fs::create_dir_all(".build").await;
+    tokio::fs::write(POSITIONS_FILE, positions.to_string()).await.map_err(|e| fail(e.to_string()))?;
+    Ok(Json(json!({"ok": true})))
 }
 
 async fn send(Json(m): Json<Value>) -> Result<Json<Value>, Failure> {
@@ -99,7 +142,7 @@ async fn send(Json(m): Json<Value>) -> Result<Json<Value>, Failure> {
         return Err(bad("need `to` and `text`"));
     };
     // The text goes in on standard input, so it can contain anything.
-    jarvis(&["send", "--as", "human", to, "-"], Some(text), false).await?;
+    jarvis::run(&["send", "--as", "human", to, "-"], Some(text), false).await.map_err(fail)?;
     Ok(Json(json!({"ok": true})))
 }
 
@@ -114,13 +157,13 @@ async fn act(Json(m): Json<Value>) -> Result<Json<Value>, Failure> {
     if who == me() && action != "start" {
         return Err(bad(format!("{who} is the process serving this page. Use `jarvis {action} {who}` in a terminal")));
     }
-    let said = jarvis(&[action, who], None, true).await?;
+    let said = jarvis::run(&[action, who], None, true).await.map_err(fail)?;
     Ok(Json(json!({"ok": true, "said": said.trim()})))
 }
 
 async fn files(Query(q): Params) -> Result<Json<Value>, Failure> {
     let who = q.get("who").ok_or_else(|| bad("need `who`"))?;
-    let listed = jarvis(&["show", who], None, false).await?;
+    let listed = jarvis::run(&["show", who], None, false).await.map_err(fail)?;
     let names: Vec<&str> = listed.lines().filter(|line| !line.is_empty()).collect();
     Ok(Json(json!({ "files": names })))
 }
@@ -129,7 +172,7 @@ async fn file(Query(q): Params) -> Result<Json<Value>, Failure> {
     let (Some(who), Some(path)) = (q.get("who"), q.get("path")) else {
         return Err(bad("need `who` and `path`"));
     };
-    let mut text = jarvis(&["show", who, path], None, false).await?;
+    let mut text = jarvis::run(&["show", who, path], None, false).await.map_err(fail)?;
     let cut = text.len() > MOST;
     if cut {
         let mut end = MOST;
@@ -182,12 +225,26 @@ async fn listen() -> (TcpListener, u16) {
 #[tokio::main]
 async fn main() {
     let dist = std::env::var("PAGE_DIST").unwrap_or_else(|_| "web/dist".into());
+    let hub = Arc::new(Hub::default());
+    tokio::spawn(follow(hub.clone()));
+    let ticking = hub.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(BATCH_EVERY);
+        loop {
+            tick.tick().await;
+            ticking.flush();
+        }
+    });
     let app = Router::new()
-        .route("/api/snapshot", get(snapshot))
+        .route("/api/stream", get(stream))
+        .route("/api/older", get(older))
+        .route("/api/steps", get(steps))
         .route("/api/send", post(send))
         .route("/api/act", post(act))
         .route("/api/files", get(files))
         .route("/api/file", get(file))
+        .route("/api/positions", get(positions).post(save_positions))
+        .with_state(hub)
         .fallback_service(ServeDir::new(dist));
     let (listener, port) = listen().await;
     println!("page at http://127.0.0.1:{port}");

@@ -2,18 +2,13 @@
   // Everything addressed to the reader, from anyone, newest first.
   import { ago, clock } from './api';
   import { light } from './markdown';
-  import { HUMAN, KERNEL, go, href, store, toProcess } from './store.svelte';
+  import { KERNEL, go, href, store, toProcess } from './live/store.svelte';
 
-  const messages = $derived(
-    store.messages
-      .filter((m) => m.to === HUMAN)
-      .slice(-300)
-      .reverse(),
-  );
+  const messages = $derived([...store.thread('inbox').messages].reverse());
 
   // The kernel has no conversation of its own: seeing its notices here is reading them.
   $effect(() => {
-    store.messages.length;
+    messages.length;
     store.markRead(KERNEL);
   });
 </script>

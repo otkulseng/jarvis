@@ -1,7 +1,7 @@
 <script lang="ts">
   // The messages between two processes. The reader is not part of this
   // conversation, so there is nothing to type into.
-  import { HUMAN, go, href, store, toProcess } from './store.svelte';
+  import { HUMAN, edgeTopic, go, href, store, toProcess } from './live/store.svelte';
   import Thread from './Thread.svelte';
 
   let { a, b }: { a: string; b: string } = $props();
@@ -11,7 +11,8 @@
     if (a === HUMAN || b === HUMAN) go(toProcess(a === HUMAN ? b : a));
   });
 
-  const messages = $derived(store.messages.filter((m) => (m.from === a && m.to === b) || (m.from === b && m.to === a)));
+  const topic = $derived(edgeTopic(a, b));
+  const count = $derived(store.edges.find((e) => `edge:${e.a}|${e.b}` === topic)?.count ?? store.thread(topic).messages.length);
 </script>
 
 <section>
@@ -31,12 +32,12 @@
         <a href={href(toProcess(b))}>{b}</a>
       </h1>
       <p>
-        {messages.length} message{messages.length === 1 ? '' : 's'} between them. You are reading along: to take part, open
+        {count} message{count === 1 ? '' : 's'} between them. You are reading along: to take part, open
         <a href={href(toProcess(a))}>{a}</a> or <a href={href(toProcess(b))}>{b}</a>.
       </p>
     </div>
   </header>
-  <Thread {messages} rightIs={b} empty="{a} and {b} have not written to each other." />
+  <Thread {topic} rightIs={b} empty="{a} and {b} have not written to each other." />
 </section>
 
 <style>

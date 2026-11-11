@@ -4,9 +4,9 @@
   import Dock from './lib/Dock.svelte';
   import EdgeView from './lib/EdgeView.svelte';
   import Inbox from './lib/Inbox.svelte';
-  import MapView from './lib/MapView.svelte';
+  import MapView from './lib/map/MapView.svelte';
   import ProcessView from './lib/ProcessView.svelte';
-  import { go, href, store } from './lib/store.svelte';
+  import { go, href, store } from './lib/live/store.svelte';
 
   onMount(() => store.start());
 

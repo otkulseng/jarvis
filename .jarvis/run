@@ -51,6 +51,9 @@ build() {
         fi
         npm run build
     ) || return 1
+    # The server's tests: a mistake in what a change means stops here, and the
+    # page that is up stays up.
+    cargo test --release --quiet || return 1
     cargo build --release --quiet || return 1
     rm -rf ".build/$id.tmp" ".build/$id"
     mkdir -p ".build/$id.tmp" && cp -R web/dist ".build/$id.tmp/dist" && cp target/release/page ".build/$id.tmp/page" &&

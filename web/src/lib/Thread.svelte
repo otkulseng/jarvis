@@ -1,17 +1,18 @@
 <script lang="ts">
   import { clock, type Message } from './api';
   import { light } from './markdown';
-  import { HUMAN, edgeKey, href, store } from './store.svelte';
+  import { HUMAN, edgeKey, href, store } from './live/store.svelte';
   import Turn from './Turn.svelte';
   import { buildTurns, type Turn as TurnData } from './turns';
 
   let {
-    messages,
+    topic,
     turnsOf = null,
     rightIs = HUMAN,
     empty = 'Nothing said yet.',
   }: {
-    messages: Message[];
+    /** Which conversation: `process:NAME`, `edge:A|B` or `inbox` (see the store). */
+    topic: string;
     /** The process whose turns are shown between the messages, if any. */
     turnsOf?: string | null;
     /** Whose messages are drawn on the right. */
@@ -23,9 +24,9 @@
 
   type Item = { key: string; at: number; message?: Message; turn?: TurnData };
 
-  const turns = $derived(
-    turnsOf ? buildTurns([...store.facts, ...store.steps].filter((event) => event.proc === turnsOf)) : [],
-  );
+  const thread = $derived(store.thread(topic));
+  const messages = $derived(thread.messages);
+  const turns = $derived(turnsOf ? buildTurns([...thread.facts, ...thread.steps]) : []);
 
   /** Messages and turns as one story, in the order they began. */
   const items = $derived<Item[]>(
@@ -40,6 +41,29 @@
   const isOpen = (turn: TurnData) => chosen.get(turn.key) ?? turn === turns.at(-1);
   function toggle(turn: TurnData) {
     chosen = new Map(chosen).set(turn.key, !isOpen(turn));
+  }
+
+  // The steps of a turn that is over are fetched when it is first shown open.
+  const asked = new Set<string>();
+  $effect(() => {
+    for (const turn of turns) {
+      if (!turnsOf || turn.outcome === 'running' || turn.rows.length || asked.has(turn.key) || !isOpen(turn)) continue;
+      asked.add(turn.key);
+      void store.loadSteps(turnsOf, turn.startId, turn.endId).catch(() => asked.delete(turn.key));
+    }
+  });
+
+  let loadingOlder = $state(false);
+  async function older() {
+    loadingOlder = true;
+    const before = list?.scrollHeight ?? 0;
+    try {
+      await store.loadOlder(topic);
+    } finally {
+      loadingOlder = false;
+      // Stay at the message the reader was at.
+      requestAnimationFrame(() => list && (list.scrollTop += list.scrollHeight - before));
+    }
   }
 
   /** A message sent from the page's own chat says what the reader was looking at. */
@@ -65,6 +89,9 @@
 
 <div class="thread" bind:this={list} {onscroll}>
   <div class="inner">
+    {#if thread.more}
+      <button class="btn quiet older" disabled={loadingOlder} onclick={older}>{loadingOlder ? 'Loading…' : 'Earlier messages'}</button>
+    {/if}
     {#each items as item (item.key)}
       {#if item.turn}
         <Turn turn={item.turn} who={turnsOf ?? ''} open={isOpen(item.turn)} now={store.now} ontoggle={() => toggle(item.turn!)} />
@@ -102,7 +129,7 @@
         </article>
       {/if}
     {:else}
-      <p class="empty">{empty}</p>
+      <p class="empty">{thread.problem || (thread.loaded ? empty : 'Loading…')}</p>
     {/each}
   </div>
 </div>
@@ -187,6 +214,11 @@
     margin-top: 6px;
     font-size: 11px;
     color: var(--faint);
+  }
+  .older {
+    display: block;
+    margin: 0 auto 14px;
+    font-size: 12px;
   }
   .empty {
     margin: 40px 0;

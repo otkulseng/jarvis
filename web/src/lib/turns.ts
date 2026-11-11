@@ -32,6 +32,9 @@ export type Row = Said | ToolUse;
 
 export interface Turn {
   key: string;
+  /** The facts that began and ended it: its steps lie between them. */
+  startId: number;
+  endId: number | null;
   at: number;
   /** When it ended, or null while it runs. */
   end: number | null;
@@ -77,7 +80,7 @@ export function buildTurns(events: Fact[]): Turn[] {
   let open: Turn | null = null;
   const tools = new Map<string, ToolUse>();
   const begin = (fact: Fact): Turn => {
-    const turn: Turn = { key: `t${fact.id}`, at: fact.at, end: null, outcome: 'running', cost: null, error: '', rows: [] };
+    const turn: Turn = { key: `t${fact.id}`, startId: fact.id, endId: null, at: fact.at, end: null, outcome: 'running', cost: null, error: '', rows: [] };
     turns.push(turn);
     return turn;
   };
@@ -86,7 +89,7 @@ export function buildTurns(events: Fact[]): Turn[] {
     switch (fact.kind) {
       case 'turn_start':
         // A turn that never reported its end was cut off with the kernel.
-        if (open) Object.assign(open, { end: fact.at, outcome: 'interrupted' });
+        if (open) Object.assign(open, { end: fact.at, endId: fact.id, outcome: 'interrupted' });
         open = begin(fact);
         break;
       case 'step': {
@@ -111,6 +114,7 @@ export function buildTurns(events: Fact[]): Turn[] {
       case 'turn_interrupted':
         if (!open) break;
         open.end = fact.at;
+        open.endId = fact.id;
         open.outcome = fact.kind === 'turn' ? 'done' : fact.kind === 'turn_failed' ? 'failed' : 'interrupted';
         open.cost = typeof d.cost_usd === 'number' ? d.cost_usd : null;
         open.error = typeof d.error === 'string' ? d.error : '';
