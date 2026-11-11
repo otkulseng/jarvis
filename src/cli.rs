@@ -18,7 +18,7 @@ pub struct Cli {
 /// The commands in the order they are listed, under these headings.
 const GROUPS: &[(&str, &[&str])] = &[
     ("Starting", &["init", "up"]),
-    ("Processes", &["spawn", "ps", "stop", "start"]),
+    ("Processes", &["spawn", "ps", "stop", "start", "remove"]),
     ("Talking", &["send", "messages"]),
     ("Looking", &["show", "log"]),
 ];
@@ -83,8 +83,8 @@ pub enum Cmd {
     /// Create a process: a new expert with its own name, directory and agent
     #[command(long_about = "Create a process: a new expert with its own name, directory and agent.\n\n\
         The name is the process: its address for messages, and its git branch, \
-        `jarvis/NAME`, which is checked out as its own directory. A name is never \
-        used twice. The new process is a peer of every other process. Anyone can \
+        `jarvis/NAME`, which is checked out as its own directory. No two processes \
+        share a name. The new process is a peer of every other process. Anyone can \
         spawn: the human, or a process during its turn.\n\n\
         What it starts with is your choice:\n\
         \x20 (no options)   Nothing. It does nothing, and costs nothing, until someone\n\
@@ -143,6 +143,22 @@ pub enum Cmd {
         instead of after its pause.")]
     #[command(after_long_help = "Examples:\n  jarvis start lammps")]
     Start(Who),
+
+    /// Delete a process for good: its directory, branch, mail and history
+    #[command(long_about = "Delete a process for good: its directory, branch, mail and history.\n\n\
+        What it is doing is ended first, as with `jarvis stop`. Then its directory, \
+        its branch `jarvis/NAME`, the messages to and from it, and the facts recorded \
+        about it are deleted. One fact is kept: that it was removed, by whom, what it \
+        had cost, and the commit its branch was at. Afterwards the name is free to be \
+        used again.\n\n\
+        Work it landed on an expert's branch is not touched. Work it had not landed \
+        goes with its branch: the commit is printed, and \
+        `git branch jarvis/NAME <commit>` brings the files back for as long as git \
+        still has them (weeks, by default). With --keep-branch the branch stays, and \
+        the name stays taken.\n\n\
+        Branches on a remote are never touched. A process cannot remove itself.")]
+    #[command(after_long_help = "Examples:\n  jarvis remove scratch\n  jarvis remove page0 page1\n  jarvis remove lammps-gpu --keep-branch")]
+    Remove(Remove),
 
     /// Send a message to a process, or to the human
     #[command(long_about = "Send a message to a process, or to the human.\n\n\
@@ -273,6 +289,17 @@ pub struct SendArgs {
     /// Send as someone else, such as `human`. For programs that pass on what a person typed
     #[arg(long = "as", value_name = "WHO")]
     pub sender: Option<String>,
+}
+
+#[derive(Args)]
+pub struct Remove {
+    /// One or more processes, by name
+    #[arg(required = true, value_name = "WHO")]
+    pub who: Vec<String>,
+
+    /// Keep its git branch, so that its files and history stay (the name stays taken)
+    #[arg(long)]
+    pub keep_branch: bool,
 }
 
 #[derive(Args)]

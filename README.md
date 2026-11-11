@@ -12,7 +12,7 @@ work. `thoughts.md` says why; this says how.
 - **Processes** are branches of this repository, named `jarvis/<name>`. A
   process is a name with a mailbox, its own directory of files, and an agent
   that can change them. While a process runs here its branch is checked out
-  under `.jarvis/proc/<name>/`. A name is never used twice.
+  under `.jarvis/proc/<name>/`. No two processes share a name.
 - **Experts** are branches with plain names, such as `page`. An expert is a
   body of code together with what is known about it. Its processes start from
   it (`jarvis spawn page0 --from page`), work on their own branches, and land
@@ -61,6 +61,7 @@ In another terminal:
     jarvis log -f        # what is happening
     jarvis stop polaris  # end its turn and service now; its mail waits
     jarvis start polaris # let it go on
+    jarvis remove scratch # delete it for good: directory, branch, mail, history
 
 `jarvis` alone lists every command; `jarvis help <command>` explains one in
 full, with examples. Processes use the same commands to talk to and create

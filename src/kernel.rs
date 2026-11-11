@@ -351,6 +351,8 @@ impl Kernel {
             }
             match db::procs(&self.db) {
                 Ok(procs) => {
+                    // A process that was removed is forgotten here too.
+                    self.live.retain(|id, _| procs.iter().any(|p| &p.id == id));
                     for proc in &procs {
                         if proc.home != self.here {
                             continue;

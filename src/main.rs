@@ -14,7 +14,7 @@ mod kernel;
 use clap::{CommandFactory, FromArgMatches};
 use cli::{Cli, Cmd};
 use db::{HUMAN, Home, KERNEL, Proc, Res};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 use std::fs;
 use std::io::{IsTerminal, Read};
@@ -44,6 +44,7 @@ fn run(command: Cmd) -> Res<()> {
         Cmd::Ps(args) => ps(args),
         Cmd::Stop(args) => set_status(args, "stopped"),
         Cmd::Start(args) => set_status(args, "alive"),
+        Cmd::Remove(args) => remove(args),
         Cmd::Send(args) => send(args),
         Cmd::Messages(args) => messages(args),
         Cmd::Show(args) => show(args),
@@ -182,8 +183,8 @@ fn spawn(args: cli::Spawn) -> Res<()> {
     }
     if git::git(&home.root, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).is_ok() {
         return Err(format!(
-            "there already is a branch `{branch}`, though no process is called `{name}`. A name is never used twice: \
-             choose another, or delete that branch first if you are sure nothing needs it"
+            "there already is a branch `{branch}`, though no process is called `{name}` (it was kept when a process \
+             was removed, or made by hand). Choose another name, or delete that branch first if nothing needs it"
         )
         .into());
     }
@@ -353,8 +354,17 @@ fn describe(home: &Home, conn: &Connection, p: &Proc) -> Res<Value> {
     } else {
         "idle"
     };
+    // What it was started from (an expert's branch, another process), if anything.
+    let from: Option<String> = conn
+        .query_row(
+            "SELECT json_extract(data, '$.from') FROM events WHERE proc = ?1 AND kind = 'spawn' ORDER BY id DESC LIMIT 1",
+            [&p.id],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten();
     Ok(json!({
-        "id": p.id, "name": p.name, "state": state, "about": about(&dir),
+        "id": p.id, "name": p.name, "state": state, "about": about(&dir), "from": from,
         "home": p.home, "branch": p.branch, "directory": dir.display().to_string(), "harness": p.harness,
         "parent": p.parent, "created_at": p.created_at,
         "turns": turns, "cost_usd": cost, "mail_waiting": mail,
@@ -494,6 +504,91 @@ fn set_status(args: cli::Who, status: &str) -> Res<()> {
     }
     if kernel_pid(&conn).is_none() {
         note("the kernel is not running here; this takes effect when `jarvis up` is started");
+    }
+    Ok(())
+}
+
+/// Delete processes for good.
+fn remove(args: cli::Remove) -> Res<()> {
+    let home = Home::find()?;
+    let conn = home.open()?;
+    // All of them must exist before any is touched.
+    let procs: Vec<Proc> = args.who.iter().map(|who| find(&conn, who)).collect::<Res<_>>()?;
+    let by = me();
+    if procs.iter().any(|p| p.id == by) {
+        return Err("a process cannot remove itself: this command is one of the programs that would be ended. Ask another process, or the human".into());
+    }
+    for proc in &procs {
+        conn.execute("UPDATE processes SET status = 'stopped' WHERE id = ?1", [&proc.id])?;
+    }
+    for proc in procs {
+        // Nothing of it may still be running when its directory goes.
+        if kernel_pid(&conn).is_some() {
+            // The kernel ends its service and turn, as for `jarvis stop`. Give
+            // it time to see the change, then wait until it has let go.
+            std::thread::sleep(Duration::from_millis(500));
+            let let_go = || -> Res<bool> {
+                let busy: bool = conn.query_row("SELECT busy FROM processes WHERE id = ?1", [&proc.id], |r| r.get(0))?;
+                Ok(!busy && children::tracked(&conn, Some(&proc.id)).is_empty())
+            };
+            let mut waited = 0;
+            while !let_go()? {
+                if waited >= 150 {
+                    return Err(format!(
+                        "{} is stopped but the kernel has not finished ending what it was doing, so nothing of it was deleted. Try again",
+                        proc.label()
+                    )
+                    .into());
+                }
+                std::thread::sleep(Duration::from_millis(100));
+                waited += 1;
+            }
+        } else {
+            children::end_all(children::tracked(&conn, Some(&proc.id)));
+        }
+
+        let dir = home.proc_dir(&proc.id);
+        let commit = git::git(&home.root, &["rev-parse", "--short", &proc.branch]).ok();
+        let (turns, cost): (i64, Option<f64>) = conn.query_row(
+            "SELECT COUNT(*), SUM(json_extract(data, '$.cost_usd')) FROM events WHERE proc = ?1 AND kind = 'turn'",
+            [&proc.id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        if dir.exists() {
+            git::git(&home.root, &["worktree", "remove", "--force", &dir.to_string_lossy()])
+                .map_err(|e| format!("could not delete the directory of {}, so nothing of it was deleted: {e}", proc.label()))?;
+        }
+        let _ = git::git(&home.root, &["worktree", "prune"]);
+        if !args.keep_branch && commit.is_some() {
+            git::git(&home.root, &["branch", "-D", &proc.branch])?;
+        }
+        let _ = fs::remove_file(home.dot().join("log").join(format!("{}.run.log", proc.id)));
+        conn.execute_batch("BEGIN")?;
+        let forget = || -> Res<()> {
+            conn.execute("DELETE FROM children WHERE proc = ?1", [&proc.id])?;
+            conn.execute("DELETE FROM messages WHERE sender = ?1 OR recipient = ?1", [&proc.id])?;
+            conn.execute("DELETE FROM events WHERE proc = ?1 OR (kind = 'send' AND json_extract(data, '$.to') = ?1)", [&proc.id])?;
+            conn.execute("DELETE FROM processes WHERE id = ?1", [&proc.id])?;
+            db::event(&conn, &by, "remove", json!({
+                "name": proc.id, "commit": commit, "branch_kept": args.keep_branch, "turns": turns, "cost_usd": cost,
+            }))?;
+            Ok(())
+        };
+        match forget() {
+            Ok(()) => conn.execute_batch("COMMIT")?,
+            Err(e) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                return Err(e);
+            }
+        }
+        match (&commit, args.keep_branch) {
+            (Some(commit), true) => println!("removed {}; its branch `{}` stays, at {commit}", proc.id, proc.branch),
+            (Some(commit), false) => println!(
+                "removed {} (its branch was at {commit}; `git branch {} {commit}` brings its files back while git still has them)",
+                proc.id, proc.branch
+            ),
+            (None, _) => println!("removed {}", proc.id),
+        }
     }
     Ok(())
 }
@@ -640,6 +735,10 @@ pub fn event_lines(conn: &Connection, after: i64, who: Option<&str>, steps: bool
             "turn_interrupted" => "turn interrupted; its mail waits".to_string(),
             "spawn" => format!("created by {}", label(conn, &text("parent"))),
             "stop" => format!("stopped by {}", label(conn, &text("by"))),
+            "remove" => {
+                let cost = d["cost_usd"].as_f64().map(|c| format!(", had cost ${c:.3}")).unwrap_or_default();
+                format!("removed {} (was at {}{cost})", text("name"), text("commit"))
+            }
             "start" => format!("started by {}", label(conn, &text("by"))),
             "commit" => format!("commit {} {}", text("commit").chars().take(8).collect::<String>(), text("subject")),
             "commit_skipped" => format!("nothing committed: {}", text("why")),
