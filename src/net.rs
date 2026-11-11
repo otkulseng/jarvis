@@ -58,7 +58,7 @@ pub fn accept(stream: UnixStream, reader: BufReader<UnixStream>, id: u64, tx: &S
     let close: Close = Box::new(move || {
         let _ = closer.shutdown(std::net::Shutdown::Both);
     });
-    if tx.send(Event::LinkOpen { id, spec: None, tx: writer(out), close }).is_err() {
+    if tx.send(Event::LinkOpen { id, tx: writer(out), close }).is_err() {
         return;
     }
     let why = pump(id, reader, tx);
@@ -76,7 +76,6 @@ pub fn dial(spec: String, id: u64, cfg: Arc<Config>, tx: Sender<Event>) {
 
 fn connect(spec: &str, id: u64, cfg: &Config, tx: &Sender<Event>) -> Res<String> {
     let v: Value = serde_json::from_str(spec)?;
-    let spec = Some(spec.to_string());
     if let Some(kernel) = v["kernel"].as_str() {
         let mut stream = UnixStream::connect(cfg.run_dir.join(format!("{kernel}.sock")))
             .map_err(|_| format!("no kernel called `{kernel}` is running on this machine (its socket would be in {})", cfg.run_dir.display()))?;
@@ -85,7 +84,7 @@ fn connect(spec: &str, id: u64, cfg: &Config, tx: &Sender<Event>) -> Res<String>
         let close: Close = Box::new(move || {
             let _ = closer.shutdown(std::net::Shutdown::Both);
         });
-        tx.send(Event::LinkOpen { id, spec, tx: writer(out), close }).map_err(|_| "the kernel is stopping")?;
+        tx.send(Event::LinkOpen { id, tx: writer(out), close }).map_err(|_| "the kernel is stopping")?;
         return Ok(pump(id, BufReader::new(stream), tx));
     }
     let words: Vec<String> = v["command"].as_array().map(|a| a.iter().filter_map(|w| w.as_str().map(str::to_string)).collect()).unwrap_or_default();
@@ -115,7 +114,7 @@ fn connect(spec: &str, id: u64, cfg: &Config, tx: &Sender<Event>) -> Res<String>
         last.join(" / ")
     });
     let close: Close = Box::new(move || children::signal(pid, libc::SIGKILL));
-    tx.send(Event::LinkOpen { id, spec, tx: writer(child.stdin.take().expect("stdin is piped")), close }).map_err(|_| "the kernel is stopping")?;
+    tx.send(Event::LinkOpen { id, tx: writer(child.stdin.take().expect("stdin is piped")), close }).map_err(|_| "the kernel is stopping")?;
     let why = pump(id, BufReader::new(child.stdout.take().expect("stdout is piped")), tx);
     children::signal(pid, libc::SIGKILL);
     let status = child.wait().map(|s| s.to_string()).unwrap_or_default();

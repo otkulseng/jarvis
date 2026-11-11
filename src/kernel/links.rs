@@ -36,7 +36,7 @@ impl Kernel {
         self.table.get(kernel).is_some_and(|k| self.say(k.link, line))
     }
 
-    pub(super) fn link_open(&mut self, id: u64, _spec: Option<String>, tx: Sender<String>, close: net::Close) {
+    pub(super) fn link_open(&mut self, id: u64, tx: Sender<String>, close: net::Close) {
         self.links.insert(id, Link { tx, close, peer: None, heard: Instant::now(), refused: false });
         self.say(id, json!({"t": "hello", "name": self.me, "identity": self.cfg.identity, "version": cli::VERSION}));
     }

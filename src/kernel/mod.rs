@@ -175,7 +175,7 @@ pub enum Event {
     TurnDone(Done),
     Step { name: String, value: Value },
     RunExit { name: String, pid: u32, status: String, ok: bool },
-    LinkOpen { id: u64, spec: Option<String>, tx: Sender<String>, close: net::Close },
+    LinkOpen { id: u64, tx: Sender<String>, close: net::Close },
     LinkLine { id: u64, value: Value },
     LinkDown { id: u64, why: String },
     /// A question another kernel asked this one has an answer.
@@ -605,7 +605,7 @@ impl Kernel {
                 }
             }
             Event::RunExit { name, pid, status, ok } => self.run_exit(&name, pid, &status, ok),
-            Event::LinkOpen { id, spec, tx, close } => self.link_open(id, spec, tx, close),
+            Event::LinkOpen { id, tx, close } => self.link_open(id, tx, close),
             Event::LinkLine { id, value } => self.link_line(id, value),
             Event::LinkDown { id, why } => self.link_down(id, &why),
             Event::Answered { rid, to, body } => {
