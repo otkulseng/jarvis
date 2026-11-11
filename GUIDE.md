@@ -14,19 +14,22 @@ examples. Read that before using a command for the first time.
 - **An identity that lasts.** You keep existing between messages. Each message
   you receive starts a turn. Your session is continued from turn to turn, but
   it can be lost, so what matters must be written down.
-- **Your directory.** The directory you are in is yours alone. It is a git
-  branch, `jarvis/<your id>`, and everything in it is committed for you after
-  each turn. It is your memory and your code.
-- **`.jarvis/`** in your directory holds everything that is about *you*, as
-  opposed to the work you look after:
+- **Your name** is you: your address for messages, and your git branch,
+  `jarvis/<your name>`.
+- **Your directory.** The directory you are in is yours alone. It is that
+  branch, checked out, and everything in it is committed for you after each
+  turn. It is your memory and your code.
+- **`.jarvis/`** in your directory holds everything that is about being this
+  kind of process, as opposed to the work itself:
   - `.jarvis/PROMPT.md`: what you were asked to be, if you were given a prompt.
-  - `.jarvis/ABOUT.md`: who you are and what others can ask you. Its first
+  - `.jarvis/ABOUT.md`: what you are and what others can ask you. Its first
     line of text is what everyone sees next to your name in `jarvis ps`.
     Write it early and keep it current.
-  - your notes: what you learn and want to keep.
-  - `.jarvis/run` and `.jarvis/handle`, if you give yourself code (below).
-  - `.jarvis/claude.json`, if your agent is Claude: your own settings, above
-    all the commands you may run (below).
+  - notes: what has been learned and is worth keeping. Write many small files,
+    one per topic, not one long one: small files merge without conflicts.
+  - `.jarvis/run` and `.jarvis/handle`, if there is code (below).
+  - `.jarvis/claude.json`, if your agent is Claude: settings, above all the
+    commands you may run (below).
 
   The rest of your directory is the work itself: source code, data, documents.
   Deleting `.jarvis/` must leave an ordinary repository that owes nothing to
@@ -78,37 +81,70 @@ Code settings file:
 
 It is read at the start of each turn. When a command you need is refused, add
 it to the file and send yourself a message saying what to carry on with: you
-have it from your next turn on. A fork starts with the list of the process it came from. Have
+have it from your next turn on. The list is part of your expert, so land it like any other change. Have
 the tools to check your own work (build it, run its tests, look at the
 result) before you tell anyone it is done.
 
-## Working on the same code as others
+## Experts, and working on the same code as others
 
 All processes are branches of one git repository, and you may use all of git.
 Each process has its own directory, so two of you never edit the same files at
 the same time, even when you work on the same code.
 
-- **To read someone's code or notes**, use `jarvis show`. It needs no merge.
-- **To work on someone's code**, be a fork of them (`jarvis spawn --from`), or
-  merge their branch, `jarvis/<their id>`, into yours.
-- **To take in a peer's work**, merge it and keep your own `.jarvis/`:
+**An expert is a branch with a plain name**, such as `page` or `lammps`. It
+holds a body of code together with everything known about it: the `.jarvis/`
+directory is part of the expert and is shared by all its processes. A process
+of an expert is created with `jarvis spawn NAME --from page`. It starts with
+all of it, works on its own branch `jarvis/NAME`, and puts finished work back.
+Your first message says which branch you began from. The processes of one
+expert are alike: any of them can answer for it.
 
-      git merge --no-commit --no-ff jarvis/<their id>
+**Landing your work on your expert**, when it is finished and you have checked
+it (it builds, its tests pass):
+
+    git merge page              # take in what the others landed; resolve
+                                # conflicts here, then build and check again
+    git push . HEAD:page        # move `page` forward to your commit
+
+The second command is a merge into `page` without leaving your directory. It
+is refused when `page` has something you have not merged yet: merge again.
+Never force it. Land often and in small pieces; merge your expert in at the
+start of a piece of work, so that you build on what the others did.
+
+**Becoming a new expert.** When your code should go its own way (it is no
+longer the same thing as your expert, or others should be able to start from
+what you have become), create a branch for it at your commit and land there
+from then on:
+
+    git branch dashboard        # a new expert, starting as what you are now
+
+Then rewrite `.jarvis/PROMPT.md` and `.jarvis/ABOUT.md` to say what this
+expert is, land that, and tell those who should know. You keep your name,
+your memory and your mail. A branch called `jarvis` is not possible.
+Starting an expert from nothing is the same: any process may create one.
+
+**Other people's code.**
+
+- **To read** another process's or expert's files, use `jarvis show`, or
+  `git show <branch>:<path>`. It needs no merge.
+- **To take in code from another expert**, merge its branch but keep your own
+  `.jarvis/`, or its prompt, notes and service would replace yours:
+
+      git merge --no-commit --no-ff lammps
       git restore --source=HEAD --staged --worktree -- .jarvis
       # resolve any conflicts that remain, then:
-      git commit -m "Merge <what> from <who>"
+      git commit -m "Merge <what> from lammps"
 
-  The second line matters: without it their prompt, notes and service would
-  be merged into yours.
 - **To use code that lives elsewhere** (LAMMPS, PyTorch), add it as a git
-  submodule pinned to a commit, next to your notes, build scripts and patches.
-  After a fork, the new process runs `git submodule update --init` itself.
-- **Stay on your own branch** in your directory, and write only to your own
-  branch. Other branches are other processes' directories: read them freely,
-  and ask their owner by message when you want something changed.
+  submodule pinned to a commit, next to the notes, build scripts and patches.
+  A new process runs `git submodule update --init` itself.
+- **Stay on your own branch** in your directory. Write to your own branch and
+  land on your own expert. For anything else, ask a process of that expert by
+  message.
 - **Finish what you start.** While a merge, rebase or cherry-pick is
   unfinished, or your directory is on another branch, nothing is committed for
-  you. You are told at your next turn.
+  you. You are told at your next turn. Do not rebase your branch: others may
+  have started from it.
 
 ## Working well
 

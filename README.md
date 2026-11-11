@@ -9,12 +9,17 @@ work. `thoughts.md` says why; this says how.
   it. It keeps each process's service running, hands messages to processes,
   commits what they change, and records what happened. It holds no opinion
   about what any process is for.
-- **Processes** are branches of this repository, named `jarvis/<id>`. A
-  process is an identity with a mailbox, its own directory of files, and an
-  agent that can change them. While a process runs here its branch is checked
-  out under `.jarvis/proc/<id>/`. The id is random and long enough to be
-  unique on any machine; where a process runs is recorded, not part of its
-  name.
+- **Processes** are branches of this repository, named `jarvis/<name>`. A
+  process is a name with a mailbox, its own directory of files, and an agent
+  that can change them. While a process runs here its branch is checked out
+  under `.jarvis/proc/<name>/`. A name is never used twice.
+- **Experts** are branches with plain names, such as `page`. An expert is a
+  body of code together with what is known about it. Its processes start from
+  it (`jarvis spawn page0 --from page`), work on their own branches, and land
+  finished work back on it by merge. They are alike and share its `.jarvis/`.
+  A process whose code goes its own way creates a new expert branch from what
+  it has become. All of this is plain git, described in `GUIDE.md`; the
+  kernel knows nothing about experts.
 - **A process's tree** holds the work itself (code, data, documents) and one
   directory, `.jarvis/`, with everything that is about the process: its
   prompt, its description, its notes, its two optional executables. Delete
@@ -28,12 +33,11 @@ work. `thoughts.md` says why; this says how.
   Code and decides what its agents may do: by default, edit their own
   directory, use `jarvis`, use all of git, and search the web.
   A process adds the tools its own work needs (`npm`, `cargo`, `sbatch`) in
-  `.jarvis/claude.json` in its directory, which forks inherit.
+  `.jarvis/claude.json` in its directory, which is part of its expert.
   The adapter also reports each step its agent takes (what it says, the tools
   it uses, what comes back) while the turn runs: `jarvis log -fs` shows them.
-- **The page** is not here. It is a branch of its own, `tree/page`: an Axum
-  server with a Svelte and TypeScript page, which a process can be started
-  from. Nothing on `main` knows about it.
+- **The page** is not here. It is an expert, the branch `page`: an Axum
+  server with a Svelte and TypeScript page. Nothing on `main` knows about it.
 
 ## Starting
 
@@ -44,7 +48,7 @@ work. `thoughts.md` says why; this says how.
 
 In another terminal:
 
-    jarvis spawn page --from tree/page
+    jarvis spawn page0 --from page
     # first start builds the page (a minute or so), then: http://127.0.0.1:7878
 
     jarvis spawn polaris --prompt "You are our expert on the Polaris cluster."
@@ -62,8 +66,8 @@ In another terminal:
 full, with examples. Processes use the same commands to talk to and create
 each other.
 
-On a fresh clone the page's branch is `origin/tree/page`:
-`jarvis spawn page --from origin/tree/page`.
+On a fresh clone the branch `page` exists only on the remote so far;
+`--from page` finds it there.
 
 ## A process's code
 
@@ -79,11 +83,11 @@ With neither, the agent handles every message.
 
 ## Several processes, one code
 
-A code is a process. Several processes working on the same code are forks of
-it (`jarvis spawn --from`), each on its own branch in its own directory, and
-they exchange work with ordinary git merges. Code from elsewhere (LAMMPS,
-PyTorch) is a git submodule in the tree of the process that is the expert on
-it. `GUIDE.md` tells the agents how.
+A code is an expert: a branch with a plain name. Several processes working on
+it each start from it (`jarvis spawn NAME --from page`), work on their own
+branch in their own directory, merge it in to get each other's work, and land
+their own on it. Code from elsewhere (LAMMPS, PyTorch) is a git submodule in
+the tree of the expert on it. `GUIDE.md` tells the agents how.
 
 ## When things go wrong
 

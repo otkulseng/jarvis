@@ -43,7 +43,7 @@ pub fn overview() -> String {
         }
     }
     text.push_str(
-        "\nWHO is a process's name or id. `human` is the person.\n\
+        "\nWHO is a process's name. `human` is the person.\n\
          Commands that print a list also take --json, for programs.\n\
          \n\
          jarvis help <command>    everything about one command, with examples\n",
@@ -82,35 +82,37 @@ pub enum Cmd {
 
     /// Create a process: a new expert with its own name, directory and agent
     #[command(long_about = "Create a process: a new expert with its own name, directory and agent.\n\n\
-        The new process gets a random id, a git branch `jarvis/<id>`, and that branch \
-        checked out as its own directory. It is a peer of every other process. Anyone \
-        can spawn: the human, or a process during its turn.\n\n\
+        The name is the process: its address for messages, and its git branch, \
+        `jarvis/NAME`, which is checked out as its own directory. A name is never \
+        used twice. The new process is a peer of every other process. Anyone can \
+        spawn: the human, or a process during its turn.\n\n\
         What it starts with is your choice:\n\
         \x20 (no options)   Nothing. It does nothing, and costs nothing, until someone\n\
         \x20                sends it a message; that message tells it what to be.\n\
         \x20 --prompt       Who it is and what it is for.\n\
-        \x20 --from WHAT    The files and history of another process (a fork), or of\n\
-        \x20                any branch, tag or commit.\n\
+        \x20 --from WHAT    The files and history of a branch: an expert's (`page`),\n\
+        \x20                a process's (`jarvis/NAME`), or any tag or commit.\n\
         \x20 --tree DIR     A copy of a directory.\n\n\
         Unless it starts with nothing, it is woken at once by a first message from \
-        you. Prints the id of the new process.")]
+        you. Prints the name of the new process.")]
     #[command(after_long_help = "Examples:\n\
         \x20 jarvis spawn scratch\n\
         \x20     A blank process, waiting for its first message.\n\n\
         \x20 jarvis spawn polaris --prompt \"You are our expert on the Polaris cluster.\"\n\
         \x20     An expert that starts from a prompt alone.\n\n\
-        \x20 jarvis spawn lammps-gpu --from lammps --prompt \"You work on the GPU kernels.\"\n\
-        \x20     A fork of `lammps`: same code and history, its own branch and directory.\n\
+        \x20 jarvis spawn page0 --from page\n\
+        \x20     One more process of the expert `page`: the branch `page` is the code and\n\
+        \x20     knowledge all of them share, and `jarvis/page0` is where this one works.\n\
         \x20     Run it several times, with different names, for several processes on one code.\n\n\
-        \x20 jarvis spawn page --from tree/page\n\
-        \x20     Start from a branch that is not a process.\n\n\
+        \x20 jarvis spawn gpu --from jarvis/lammps1 --prompt \"You work on the GPU kernels.\"\n\
+        \x20     A fork of the process `lammps1`: what it has now, landed or not.\n\n\
         \x20 jarvis spawn sim --tree ~/code/sim --prompt-file brief.md\n\
         \x20     Bring in files that are not in this repository yet.")]
     Spawn(Spawn),
 
     /// Who exists and what each is doing; or everything about one process
     #[command(long_about = "Who exists and what each is doing; or everything about one process.\n\n\
-        Without WHO: one line per process, with its id, name, state, who made it, and \
+        Without WHO: one line per process, with its name, state, who made it, and \
         how it describes itself (the first line of its .jarvis/ABOUT.md). The state is:\n\
         \x20 idle           waiting for a message\n\
         \x20 thinking 3m    a turn is in progress, for this long\n\
@@ -215,14 +217,17 @@ pub struct Spawn {
     #[arg(long, value_name = "FILE")]
     pub prompt_file: Option<String>,
 
-    /// Start as a fork of a process, or from any git branch, tag or commit
+    /// Start from a git branch (an expert's, or a process's), tag or commit
     #[arg(long, value_name = "WHAT", conflicts_with = "tree",
-          long_help = "Start as a fork of a process, or from any git branch, tag or commit.\n\n\
+          long_help = "Start from a git branch (an expert's, or a process's), tag or commit.\n\n\
               The new process gets the same files and the same history on a branch of its own, \
-              so work can later be merged in either direction. A fork of a process also \
-              inherits that process's `.jarvis/` directory (its notes, its service), but not \
-              its conversation: it starts with a fresh memory. WHAT is tried as a process \
-              name or id first, then as something git knows.")]
+              so work can later be merged in either direction. Everything comes along, the \
+              `.jarvis/` directory included (prompt, notes, service, tools), but no \
+              conversation: it starts with a fresh memory.\n\n\
+              An expert is a branch with a plain name, such as `page`, that its processes \
+              land their finished work on. A process's own branch is `jarvis/NAME`. WHAT is \
+              tried as something git knows first, then as a process's name, then as a branch \
+              of that name on the remote (`origin/WHAT`).")]
     pub from: Option<String>,
 
     /// Start from a copy of a directory of files
@@ -251,14 +256,14 @@ pub struct Ps {
 
 #[derive(Args)]
 pub struct Who {
-    /// One or more processes, by name or id
+    /// One or more processes, by name
     #[arg(required = true)]
     pub who: Vec<String>,
 }
 
 #[derive(Args)]
 pub struct SendArgs {
-    /// Who it is for: a process's name or id, or `human`
+    /// Who it is for: a process's name, or `human`
     pub to: String,
 
     /// The message. With none, or `-`, it is read from standard input
@@ -294,7 +299,7 @@ pub struct Messages {
 
 #[derive(Args)]
 pub struct Show {
-    /// The process, by name or id
+    /// The process, by name
     pub who: String,
 
     /// A file in its directory. Without it, the names of all its files

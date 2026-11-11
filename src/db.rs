@@ -173,7 +173,8 @@ impl Proc {
     /// What to call it when talking to people and agents.
     pub fn label(&self) -> String {
         match &self.name {
-            Some(name) => format!("{name} ({})", self.id),
+            Some(name) if *name != self.id => format!("{name} ({})", self.id),
+            Some(name) => name.clone(),
             None => self.id.clone(),
         }
     }

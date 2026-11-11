@@ -169,9 +169,21 @@ fn spawn(args: cli::Spawn) -> Res<()> {
     }
     if let Some(existing) = db::find_proc(&conn, name)? {
         return Err(format!(
-            "there already is a process called `{name}` ({}, made by {}); choose another name",
-            existing.id,
+            "there already is a process called `{name}` (made by {}); choose another name",
             label(&conn, &existing.parent)
+        )
+        .into());
+    }
+    // The name is the process: its address, its directory and its branch.
+    let id = name.to_string();
+    let branch = format!("jarvis/{name}");
+    if git::git(&home.root, &["check-ref-format", "--branch", &branch]).is_err() {
+        return Err(format!("`{name}` cannot be a name: git does not accept `{branch}` as a branch name").into());
+    }
+    if git::git(&home.root, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).is_ok() {
+        return Err(format!(
+            "there already is a branch `{branch}`, though no process is called `{name}`. A name is never used twice: \
+             choose another, or delete that branch first if you are sure nothing needs it"
         )
         .into());
     }
@@ -182,23 +194,32 @@ fn spawn(args: cli::Spawn) -> Res<()> {
         (None, None) => None,
     };
 
-    // Where it starts from: the branch of a process, or anything git knows.
+    // Where it starts from: anything git knows (an expert's branch, a
+    // process's branch `jarvis/NAME`, a tag, a commit), then a process by
+    // name, then a branch that so far exists only on the remote.
     let mut forked: Option<Proc> = None;
     let start = match &args.from {
         None => None,
-        Some(what) => match db::find_proc(&conn, what)? {
-            Some(proc) => {
+        Some(what) => {
+            let commit_of = |what: &str| git::git(&home.root, &["rev-parse", "--verify", "--quiet", &format!("{what}^{{commit}}")]).ok();
+            if let Some(commit) = commit_of(what) {
+                if let Some(of) = what.strip_prefix("jarvis/") {
+                    forked = db::find_proc(&conn, of)?;
+                }
+                Some(commit)
+            } else if let Some(proc) = db::find_proc(&conn, what)? {
                 let branch = proc.branch.clone();
                 forked = Some(proc);
                 Some(branch)
-            }
-            None => {
-                let commit = git::git(&home.root, &["rev-parse", "--verify", "--quiet", &format!("{what}^{{commit}}")]).map_err(|_| {
-                    format!("`{what}` is neither a process (`jarvis ps` lists them) nor a branch, tag or commit that git knows")
-                })?;
+            } else if let Some(commit) = commit_of(&format!("origin/{what}")) {
                 Some(commit)
+            } else {
+                return Err(format!(
+                    "`{what}` is neither a branch, tag or commit that git knows, nor a process (`jarvis ps` lists them)"
+                )
+                .into());
             }
-        },
+        }
     };
     if let Some(tree) = &args.tree {
         let tree = Path::new(tree);
@@ -216,12 +237,6 @@ fn spawn(args: cli::Spawn) -> Res<()> {
     }
     let blank = prompt.is_none() && start.is_none() && args.tree.is_none();
 
-    // Long enough to be unique across every machine without asking anyone.
-    let mut id = db::random_hex(6)?;
-    while db::find_proc(&conn, &id)?.is_some() {
-        id = db::random_hex(6)?;
-    }
-    let branch = format!("jarvis/{id}");
     let dir = home.proc_dir(&id);
     fs::create_dir_all(home.dot().join("proc"))?;
     let parent = me();
@@ -266,6 +281,20 @@ fn spawn(args: cli::Spawn) -> Res<()> {
     if !blank {
         let maker = label(&conn, &parent);
         let has_prompt = dir.join(".jarvis/PROMPT.md").exists();
+        // Said when it starts from a branch that is not a process: an expert.
+        let is_branch = |what: &str| {
+            ["refs/heads", "refs/remotes/origin"]
+                .iter()
+                .any(|place| git::git(&home.root, &["rev-parse", "--verify", "--quiet", &format!("{place}/{what}")]).is_ok())
+        };
+        let began = match &args.from {
+            Some(what) if is_branch(what) => format!(
+                " Your directory began as a copy of the branch `{what}`: that is your expert, and where your finished \
+                 work goes back to (the guide says how)."
+            ),
+            Some(what) => format!(" Your directory began as a copy of `{what}`."),
+            None => String::new(),
+        };
         let hello = match (&forked, &prompt, has_prompt) {
             (Some(origin), Some(_), _) => format!(
                 "[jarvis] You have just been created by {maker} as a fork of {}: your directory began as a copy of theirs, \
@@ -280,9 +309,9 @@ fn spawn(args: cli::Spawn) -> Res<()> {
                 origin.label()
             ),
             (None, _, true) => format!(
-                "[jarvis] You have just been created by {maker}. Your instructions are in .jarvis/PROMPT.md. Read them and begin."
+                "[jarvis] You have just been created by {maker}.{began} Your instructions are in .jarvis/PROMPT.md. Read them and begin."
             ),
-            (None, _, false) => format!("[jarvis] You have just been created by {maker}. Look at what is in your directory and begin."),
+            (None, _, false) => format!("[jarvis] You have just been created by {maker}.{began} Look at what is in your directory and begin."),
         };
         db::post(&conn, &parent, &id, &hello)?;
     }
@@ -363,11 +392,10 @@ fn ps(args: cli::Ps) -> Res<()> {
         println!("no processes yet. `jarvis help spawn` shows how to create one.");
         return Ok(());
     }
-    println!("{:<13} {:<16} {:<13} {:<12} ABOUT", "ID", "NAME", "STATE", "MADE BY");
+    println!("{:<16} {:<13} {:<12} ABOUT", "NAME", "STATE", "MADE BY");
     for r in rows {
         println!(
-            "{:<13} {:<16} {:<13} {:<12} {}",
-            r["id"].as_str().unwrap_or(""),
+            "{:<16} {:<13} {:<12} {}",
             r["name"].as_str().unwrap_or("-"),
             state_words(&r),
             label(&conn, r["parent"].as_str().unwrap_or("")),
@@ -412,7 +440,6 @@ fn ps_one(home: &Home, conn: &Connection, p: &Proc, as_json: bool) -> Res<()> {
 
     let line = |key: &str, value: String| println!("{key:<10} {value}");
     line("name", p.short().to_string());
-    line("id", p.id.clone());
     line("state", state_words(&row));
     line("about", match row["about"].as_str() {
         Some(text) if !text.is_empty() => text.to_string(),
