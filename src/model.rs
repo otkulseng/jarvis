@@ -218,10 +218,11 @@ impl Model {
                 }
             }
             "gone" => {
+                // Its lines are no longer drawn (a line needs both its ends), but
+                // what was counted on them is kept: a process whose kernel
+                // stopped is back, lines and all, when the kernel is.
                 let name = text(change, "id").to_string();
                 self.processes.remove(&name);
-                self.edges.retain(|key, _| key.0 != name && key.1 != name);
-                self.open.retain(|_, key| key.0 != name && key.1 != name);
                 out.push(Out { topics: vec!["map".into()], key: None, frame: json!({"type": "gone", "id": name}) });
             }
             "fact" => {
@@ -348,15 +349,18 @@ mod tests {
     }
 
     #[test]
-    fn a_removed_process_takes_its_lines_with_it() {
+    fn a_process_that_goes_takes_its_lines_with_it_and_brings_them_back() {
         let mut model = Model::default();
         model.apply(&process("a"));
         model.apply(&process("b"));
         model.apply(&send(1, "a", "b", "pending", "hi"));
         let out = model.apply(&json!({"kind": "gone", "id": "b"}));
         assert_eq!(out[0].frame["type"], "gone");
-        assert!(model.edges.is_empty());
         assert!(model.map().iter().all(|frame| frame["type"] == "process"));
+        // Its kernel is up again.
+        let back = model.apply(&process("b"));
+        assert_eq!(back[1].frame["edge"]["count"], 1);
+        assert_eq!(back[1].frame["edge"]["waiting"], 1);
     }
 
     /// Many events must stay cheap: each one is a few map lookups, whatever came before.
