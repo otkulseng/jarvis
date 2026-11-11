@@ -538,6 +538,12 @@ pub struct Kernel {
 
 /// `jarvis up`: set a kernel up, run it until it is told to stop.
 pub fn up(args: cli::Up, store: Option<String>) -> Res<()> {
+    // A link's command or a client can end while the kernel is writing to
+    // it. That must fail that one write, not end the kernel (which is what a
+    // broken pipe does to a command-line program, and what `main` asks for).
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_IGN);
+    }
     let name = args.name.clone();
     index::check_name(&name, "kernel")?;
     if matches!(name.as_str(), HUMAN | KERNEL) {
