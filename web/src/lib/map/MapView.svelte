@@ -74,7 +74,7 @@
       { id: HUMAN, label: 'you', sub: '', state: 'you', radius: 4.5, badge: 0, group: null, lit: false },
       ...inside.map((p) => ({
         id: p.id,
-        label: p.id,
+        label: store.label(p.id),
         sub: p.id === store.me ? 'this page' : '',
         state: p.state,
         // Small, and a little larger the more it talks.
@@ -203,7 +203,7 @@
   <ul class="list">
     <li><a href={href({ view: 'inbox' })}>Inbox</a></li>
     {#each inside as p (p.id)}
-      <li><a href={href(toProcess(p.id))}>{p.id}: {p.state}</a></li>
+      <li><a href={href(toProcess(p.id))}>{store.label(p.id)}: {p.state}</a></li>
     {/each}
   </ul>
 
@@ -236,7 +236,7 @@
 
   {#if hover && hovered}
     <div class="card" style:left="{hover.x}px" style:top="{hover.y + (hovered.id === store.me ? 46 : 32)}px">
-      <div class="name">{hovered.id}{#if hoveredUnread}<span class="unread">{hoveredUnread} unread</span>{/if}</div>
+      <div class="name">{store.label(hovered.id)}{#if hoveredUnread}<span class="unread">{hoveredUnread} unread</span>{/if}</div>
       <div class="about">{hovered.about || 'Has not described itself yet.'}</div>
       <div class="facts">
         {hovered.state === 'thinking' ? 'working' : hovered.state}

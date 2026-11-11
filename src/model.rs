@@ -9,7 +9,7 @@
 //! Browsers are told things in *frames*, JSON objects with a `type`:
 //!
 //!   process  {"process": {...}}        a process, as `jarvis ps --json` shows it
-//!   gone     {"name": NAME}            a process was removed
+//!   gone     {"id": ADDRESS}           a process was removed, or its kernel closed
 //!   edge     {"edge": {a, b, count, talk, waiting, last_at}}
 //!                                      how much two have written to each other.
 //!                                      `talk` leaves out what jarvis wrote on
@@ -28,13 +28,44 @@
 //!
 //!   map              every process and every edge
 //!   inbox            messages to the human
-//!   process:NAME     the messages to and from NAME, and the facts about it
+//!   process:ID       the messages to and from a process, and the facts about it
 //!   edge:A|B         the messages between A and B (A before B in the alphabet)
+//!
+//! Who is who: a process is known by its address, `name@kernel`, on whichever
+//! kernel it runs. The human is one, wherever they typed: jarvis says
+//! `human@laptop`, `human@node2`, and the page says `human` for all of them
+//! (`canon`). What a kernel itself writes (`kernel@laptop`) is `kernel`.
 
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap};
 
 pub const HUMAN: &str = "human";
+pub const KERNEL: &str = "kernel";
+
+/// Who an address is, to the page: the one human, `kernel`, or a process by its address.
+pub fn canon(address: &str) -> &str {
+    match address.split('@').next() {
+        Some(HUMAN) => HUMAN,
+        Some(KERNEL) => KERNEL,
+        _ => address,
+    }
+}
+
+/// A message as the page shows it: sender and recipient as the page knows them.
+pub fn shown(message: &Value) -> Value {
+    let mut message = message.clone();
+    for end in ["from", "to"] {
+        if let Some(who) = message[end].as_str().map(|address| canon(address).to_string()) {
+            message[end] = Value::String(who);
+        }
+    }
+    message
+}
+
+/// Whether a message is still on its way or waiting, as opposed to over with.
+fn is_open(message: &Value) -> bool {
+    !matches!(text(message, "status"), "handled" | "dropped" | "undeliverable")
+}
 
 /// Something to tell browsers.
 #[derive(Debug, Clone, PartialEq)]
@@ -53,7 +84,7 @@ pub struct Edge {
     pub by_jarvis: i64,
     pub waiting: i64,
     pub last_at: i64,
-    /// Messages up to this one were counted when the page started.
+    /// Messages up to this place in the feed were counted when the page started.
     pub counted_to: i64,
 }
 
@@ -62,7 +93,7 @@ pub struct Model {
     pub processes: BTreeMap<String, Value>,
     pub edges: BTreeMap<(String, String), Edge>,
     /// The messages not dealt with yet, and the edge each is on.
-    open: HashMap<i64, (String, String)>,
+    open: HashMap<String, (String, String)>,
 }
 
 pub fn pair(a: &str, b: &str) -> (String, String) {
@@ -90,10 +121,12 @@ impl Model {
         self.open.clear();
         for p in pairs {
             let n = |key: &str| p[key].as_i64().unwrap_or(0);
-            self.edges.insert(
-                pair(text(p, "a"), text(p, "b")),
-                Edge { count: n("count"), by_jarvis: n("by_jarvis"), waiting: 0, last_at: n("last_at"), counted_to: n("last_id") },
-            );
+            // Several of jarvis's pairs can be one of the page's: the human is one.
+            let edge = self.edges.entry(pair(canon(text(p, "a")), canon(text(p, "b")))).or_default();
+            edge.count += n("count");
+            edge.by_jarvis += n("by_jarvis");
+            edge.last_at = edge.last_at.max(n("last_at"));
+            edge.counted_to = edge.counted_to.max(n("last_seq"));
         }
         for m in waiting {
             self.set_open(m);
@@ -102,9 +135,9 @@ impl Model {
 
     /// Note whether a message is waiting. Safe to do twice.
     fn set_open(&mut self, message: &Value) {
-        let Some(id) = message["id"].as_i64() else { return };
-        let key = pair(text(message, "from"), text(message, "to"));
-        let waiting = text(message, "status") != "handled";
+        let Some(id) = message["id"].as_str().map(str::to_string) else { return };
+        let key = pair(canon(text(message, "from")), canon(text(message, "to")));
+        let waiting = is_open(message);
         match (waiting, self.open.contains_key(&id)) {
             (true, false) => {
                 self.edges.entry(key.clone()).or_default().waiting += 1;
@@ -157,6 +190,7 @@ impl Model {
     /// Who is told about a message: both ends, the line between them, and
     /// the inbox if it is for the human.
     fn message_out(message: &Value) -> Out {
+        let message = &shown(message);
         let (from, to) = (text(message, "from"), text(message, "to"));
         let mut topics = vec![process_topic(from), process_topic(to), edge_topic(from, to)];
         if to == HUMAN {
@@ -171,7 +205,9 @@ impl Model {
         let mut out = Vec::new();
         match text(change, "kind") {
             "process" => {
-                let process = &change["process"];
+                let mut process = change["process"].clone();
+                process["parent"] = Value::String(canon(text(&process, "parent")).to_string());
+                let process = &process;
                 let name = text(process, "id").to_string();
                 let is_new = self.processes.insert(name.clone(), process.clone()).is_none();
                 out.push(Self::process_frame(process));
@@ -182,18 +218,23 @@ impl Model {
                 }
             }
             "gone" => {
-                let name = text(change, "name").to_string();
+                let name = text(change, "id").to_string();
                 self.processes.remove(&name);
                 self.edges.retain(|key, _| key.0 != name && key.1 != name);
                 self.open.retain(|_, key| key.0 != name && key.1 != name);
-                out.push(Out { topics: vec!["map".into()], key: None, frame: json!({"type": "gone", "name": name}) });
+                out.push(Out { topics: vec!["map".into()], key: None, frame: json!({"type": "gone", "id": name}) });
             }
             "fact" => {
                 let fact = &change["fact"];
                 let message = &change["message"];
-                if text(fact, "kind") == "send" && message.is_object() {
-                    let key = pair(text(message, "from"), text(message, "to"));
-                    let id = message["id"].as_i64().unwrap_or(0);
+                // A message is brought by the fact that sent it and, when it
+                // crossed kernels, again by the fact that it arrived. It is
+                // news once: with the fact that brought it here first.
+                let brought = matches!(text(fact, "kind"), "send" | "arrive") && message.is_object() && message["seq"] == fact["id"];
+                if brought {
+                    let (from, to) = (canon(text(message, "from")), canon(text(message, "to")));
+                    let key = pair(from, to);
+                    let id = fact["id"].as_i64().unwrap_or(0);
                     let edge = self.edges.entry(key.clone()).or_default();
                     // A message counted when the page started is not counted again.
                     if id > edge.counted_to {
@@ -207,14 +248,13 @@ impl Model {
                     out.push(Self::message_out(message));
                     out.extend(self.edge_frame(&key));
                     // For the map: something just went from one to the other.
-                    let (from, to) = (text(message, "from"), text(message, "to"));
                     out.push(Out {
                         topics: vec!["map".into()],
                         key: Some(format!("pulse:{from}>{to}")),
                         frame: json!({"type": "pulse", "from": from, "to": to}),
                     });
                 }
-                let topics = vec![process_topic(text(fact, "proc"))];
+                let topics = vec![process_topic(canon(text(fact, "proc")))];
                 let frame = json!({"type": "fact", "topics": topics, "fact": fact});
                 out.push(Out { topics, key: None, frame });
             }
@@ -222,7 +262,7 @@ impl Model {
                 let message = &change["message"];
                 self.set_open(message);
                 out.push(Self::message_out(message));
-                out.extend(self.edge_frame(&pair(text(message, "from"), text(message, "to"))));
+                out.extend(self.edge_frame(&pair(canon(text(message, "from")), canon(text(message, "to")))));
             }
             // `ready`, `restart` and kinds this page does not know yet.
             _ => {}
@@ -239,10 +279,15 @@ mod tests {
         json!({"kind": "process", "process": {"id": name, "state": "idle"}})
     }
 
-    fn send(id: i64, from: &str, to: &str, status: &str, body: &str) -> Value {
+    /// The name jarvis gives message number `n` of the kernel `k`.
+    fn name(n: i64) -> String {
+        format!("k:{n}")
+    }
+
+    fn send(n: i64, from: &str, to: &str, status: &str, body: &str) -> Value {
         json!({"kind": "fact",
-               "fact": {"id": id * 10, "proc": from, "kind": "send", "data": {"message": id, "to": to}},
-               "message": {"id": id, "at": id, "from": from, "to": to, "body": body, "status": status}})
+               "fact": {"id": n * 10, "proc": from, "kind": "send", "data": {"id": name(n), "to": to}},
+               "message": {"id": name(n), "seq": n * 10, "at": n, "from": from, "to": to, "body": body, "status": status}})
     }
 
     fn edge(model: &Model, a: &str, b: &str) -> Edge {
@@ -267,8 +312,8 @@ mod tests {
         let mut model = Model::default();
         model.apply(&process("a"));
         model.apply(&send(1, HUMAN, "a", "pending", "hi"));
-        let taken = json!({"kind": "message", "message": {"id": 1, "from": HUMAN, "to": "a", "status": "taken"}});
-        let handled = json!({"kind": "message", "message": {"id": 1, "from": HUMAN, "to": "a", "status": "handled"}});
+        let taken = json!({"kind": "message", "message": {"id": name(1), "from": "human@k", "to": "a", "status": "taken"}});
+        let handled = json!({"kind": "message", "message": {"id": name(1), "from": "human@k", "to": "a", "status": "handled"}});
         model.apply(&taken);
         assert_eq!(edge(&model, "a", HUMAN).waiting, 1);
         model.apply(&handled);
@@ -281,8 +326,9 @@ mod tests {
         let mut model = Model::default();
         model.apply(&process("a"));
         model.load(
-            &[json!({"a": "a", "b": HUMAN, "count": 5, "by_jarvis": 1, "waiting": 1, "last_at": 50, "last_id": 7})],
-            &[json!({"id": 7, "from": HUMAN, "to": "a", "status": "pending"})],
+            &[json!({"a": "a", "b": "human@k", "count": 3, "by_jarvis": 1, "waiting": 1, "last_at": 50, "last_seq": 70}),
+              json!({"a": "a", "b": "human@other", "count": 2, "by_jarvis": 0, "waiting": 0, "last_at": 40, "last_seq": 60})],
+            &[json!({"id": name(7), "from": "human@k", "to": "a", "status": "pending"})],
         );
         model.apply(&send(7, HUMAN, "a", "pending", "seen before"));
         assert_eq!(edge(&model, "a", HUMAN).count, 5);
@@ -307,7 +353,7 @@ mod tests {
         model.apply(&process("a"));
         model.apply(&process("b"));
         model.apply(&send(1, "a", "b", "pending", "hi"));
-        let out = model.apply(&json!({"kind": "gone", "name": "b"}));
+        let out = model.apply(&json!({"kind": "gone", "id": "b"}));
         assert_eq!(out[0].frame["type"], "gone");
         assert!(model.edges.is_empty());
         assert!(model.map().iter().all(|frame| frame["type"] == "process"));
@@ -332,6 +378,34 @@ mod tests {
         assert_eq!(frames, 800_000);
         assert_eq!(model.edges.values().map(|e| e.count).sum::<i64>(), 200_000);
         assert!(took.as_millis() < 3000, "took {took:?}");
+    }
+
+    #[test]
+    fn a_message_that_crossed_kernels_is_news_once() {
+        let mut model = Model::default();
+        model.apply(&process("a@one"));
+        model.apply(&process("b@two"));
+        let message = json!({"id": "one:4", "seq": 40, "at": 4, "from": "a@one", "to": "b@two", "body": "hi", "status": "sent"});
+        let sent = json!({"kind": "fact", "fact": {"id": 40, "proc": "a@one", "kind": "send", "data": {"id": "one:4"}}, "message": message});
+        let mut arrived = message.clone();
+        arrived["status"] = json!("pending");
+        let arrive = json!({"kind": "fact", "fact": {"id": 55, "proc": "b@two", "kind": "arrive", "data": {"id": "one:4"}}, "message": arrived});
+        let first = model.apply(&sent);
+        let second = model.apply(&arrive);
+        assert_eq!(edge(&model, "a@one", "b@two").count, 1);
+        assert_eq!(first.iter().filter(|out| out.frame["type"] == "pulse").count(), 1);
+        assert_eq!(second.iter().filter(|out| out.frame["type"] == "pulse").count(), 0);
+        assert_eq!(second.len(), 1);
+    }
+
+    #[test]
+    fn the_human_is_one_wherever_they_typed() {
+        let mut model = Model::default();
+        model.apply(&process("a@one"));
+        let out = model.apply(&send(1, "a@one", "human@two", "handled", "done"));
+        assert!(out[0].topics.contains(&"inbox".to_string()));
+        assert_eq!(out[0].frame["message"]["to"], HUMAN);
+        assert_eq!(edge(&model, "a@one", HUMAN).count, 1);
     }
 
     #[test]

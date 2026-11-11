@@ -4,9 +4,12 @@
 export type State = 'idle' | 'thinking' | 'failing' | 'stopped';
 
 export interface Proc {
-  /** Its name. (`id` and `name` are the same thing.) */
+  /** Its address, `name@kernel`: what it is known by everywhere on the page. */
   id: string;
-  name: string | null;
+  name: string;
+  /** The kernel that hosts it, and whether that is the kernel this page is on. */
+  kernel: string;
+  here: boolean;
   /** `failing`: its last turn failed, and its mail waits for the next try. */
   state: State;
   /** How the process describes itself: the first line of its `.jarvis/ABOUT.md`. */
@@ -32,13 +35,20 @@ export interface Proc {
 }
 
 export interface Message {
-  id: number;
+  /** Its name in jarvis: the kernel it was sent from and its number there, such as `laptop:412`. */
+  id: string;
+  /** When it was sent. Messages are shown in this order. */
   at: number;
+  /** A process's address, or `human`, or `kernel`. */
   from: string;
   to: string;
   body: string;
-  /** `pending` and `taken` both mean it has not been dealt with yet. */
-  status: 'pending' | 'taken' | 'handled';
+  /**
+   * How far it has got. `sent`: not yet passed on from its kernel. `forwarded`:
+   * on its way through other kernels. `pending`: arrived, waiting. `taken`:
+   * being worked on. The rest are over with.
+   */
+  status: 'sent' | 'forwarded' | 'pending' | 'taken' | 'handled' | 'dropped' | 'undeliverable';
   /** How many times it has been given to the recipient. */
   attempts: number;
 }
@@ -86,8 +96,8 @@ const post = (path: string, body: unknown) =>
   fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
 /** The messages of a topic before message `before`. */
-export async function fetchOlder(topic: string, before: number): Promise<{ messages: Message[]; more: boolean }> {
-  return answer(await fetch(`/api/older?topic=${encodeURIComponent(topic)}&before=${before}`));
+export async function fetchOlder(topic: string, before: string): Promise<{ messages: Message[]; more: boolean }> {
+  return answer(await fetch(`/api/older?topic=${encodeURIComponent(topic)}&before=${encodeURIComponent(before)}`));
 }
 
 /** The steps an agent took between two facts: a turn's start and its end. */

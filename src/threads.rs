@@ -7,7 +7,7 @@
 //! number, so twice is harmless, and nothing can fall between the two.
 
 use crate::jarvis;
-use crate::model::HUMAN;
+use crate::model::{HUMAN, shown};
 use serde_json::{Value, json};
 
 /// How many messages are fetched at a time.
@@ -18,17 +18,22 @@ fn is(value: &Value, key: &str, wanted: &str) -> bool {
 }
 
 /// The messages of a topic, newest last; only those before `before` if given.
-pub async fn messages(topic: &str, before: Option<i64>) -> Result<Vec<Value>, String> {
-    let before = before.map(|b| b.to_string());
+pub async fn messages(topic: &str, before: Option<&str>) -> Result<Vec<Value>, String> {
+    Ok(fetch(topic, before).await?.iter().map(shown).collect())
+}
+
+/// `before` is a message's name in jarvis, such as `laptop:412`.
+async fn fetch(topic: &str, before: Option<&str>) -> Result<Vec<Value>, String> {
     let page = PAGE.to_string();
     let mut args: Vec<&str> = vec!["messages", "--json", "-n", &page];
-    if let Some(before) = &before {
+    if let Some(before) = before {
         args.extend(["--before", before]);
     }
     if topic == "inbox" {
+        // `human` alone is the human on every kernel.
         args.push(HUMAN);
         let all = jarvis::list(&args).await?;
-        Ok(all.into_iter().filter(|m| is(m, "to", HUMAN)).collect())
+        Ok(all.into_iter().filter(|m| is(&shown(m), "to", HUMAN)).collect())
     } else if let Some(name) = topic.strip_prefix("process:") {
         args.push(name);
         jarvis::list(&args).await

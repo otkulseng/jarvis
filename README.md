@@ -26,7 +26,7 @@ processes work on their own branches and land finished work on the branch
   outside the view ends at a mark on the rim named after where it leads;
   pressing the mark goes there. **Light** picks a tag and value: what matches
   glows, at every level, and the rest recedes.
-- **A process** (`#/p/NAME`): its conversation with the reader, with each of
+- **A process** (`#/p/NAME@KERNEL`): its conversation with the reader, with each of
   its turns folded between the messages; its files and notes, with markdown
   drawn as pages and `[[links]]` between notes followed; and what the kernel
   recorded about it. Stop, Start and Remove are buttons here. Creating a
@@ -76,7 +76,7 @@ and each kind of change is dealt with in one small place.
   have written to each other), and turns each change into *frames* for the
   browsers. `src/model.rs` lists the frames and the topics.
 - **A browser is told only about what it is showing.** It asks for topics
-  (`map` and `inbox` always; `process:NAME` or `edge:A|B` for what is open)
+  (`map` and `inbox` always; `process:NAME@KERNEL` or `edge:A|B` for what is open)
   and gets the frames of those.
 - **Bursts are flattened twice.** The server sends what changed a few times a
   second, and of two states of the same thing only the newer. The browser

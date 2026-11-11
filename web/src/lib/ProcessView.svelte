@@ -64,7 +64,7 @@
       </a>
       <div class="who">
         <div class="line">
-          <h1>{name}</h1>
+          <h1>{store.label(name)}</h1>
           <StatePill {proc} now={store.now} />
           {#if isMe}<span class="tag">this page</span>{/if}
         </div>
@@ -81,7 +81,7 @@
       </div>
       <div class="actions">
         {#if confirming}
-          <span class="sure">Delete {name} for good, with its files and history?</span>
+          <span class="sure">Remove {store.label(name)}? Its directory and branch go; what was said and done stays on record.</span>
           <button class="btn danger" disabled={busy !== ''} onclick={() => run('remove')}>
             {busy === 'remove' ? 'Removing…' : 'Yes, remove'}
           </button>

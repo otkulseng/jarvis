@@ -116,6 +116,14 @@
             <span>{clock(m.at)}</span>
             {#if m.status === 'taken'}
               <span class="status">being read{m.attempts > 1 ? ` (attempt ${m.attempts})` : ''}</span>
+            {:else if m.status === 'sent'}
+              <span class="status">on its way</span>
+            {:else if m.status === 'forwarded'}
+              <span class="status">passed on, not known to have arrived</span>
+            {:else if m.status === 'undeliverable'}
+              <span class="status">could not be delivered</span>
+            {:else if m.status === 'dropped'}
+              <span class="status">dropped: its recipient was removed</span>
             {:else if m.status === 'pending'}
               <span class="status">
                 waiting{m.attempts > 0 ? `: ${m.attempts} turn${m.attempts === 1 ? '' : 's'} on it did not finish` : ''}

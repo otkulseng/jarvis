@@ -116,33 +116,42 @@ const NOTHING: Thread = { messages: [], facts: [], steps: [], more: false, loade
 /** The most of each kind that is kept for one open thread. */
 const MOST = { messages: 600, facts: 800, steps: 6000 };
 
-/** A list kept in order of `id`, with each id in it once. */
-class Ordered<T extends { id: number }> {
+/** A list kept in order (by `order`), with each id in it once. */
+class Ordered<T extends { id: number | string }> {
   list: T[] = [];
-  private at = new Map<number, T>();
+  private known = new Set<number | string>();
 
-  /** Add or replace. Returns whether the list changed in a way a reader could see. */
+  constructor(private order: (item: T) => number) {}
+
+  /** Add, or replace what has the same id. */
   put(item: T, most: number): void {
-    const had = this.at.has(item.id);
-    this.at.set(item.id, item);
-    if (had) {
-      this.list[this.list.findIndex((i) => i.id === item.id)] = item;
-    } else if (!this.list.length || item.id > this.list[this.list.length - 1].id) {
+    if (this.known.has(item.id)) {
+      const at = this.list.findIndex((i) => i.id === item.id);
+      if (this.order(this.list[at]) === this.order(item)) {
+        this.list[at] = item;
+        return;
+      }
+      this.list.splice(at, 1);
+    }
+    this.known.add(item.id);
+    const key = this.order(item);
+    if (!this.list.length || key >= this.order(this.list[this.list.length - 1])) {
       this.list.push(item);
     } else {
-      this.list.splice(this.list.findIndex((i) => i.id > item.id), 0, item);
+      this.list.splice(this.list.findIndex((i) => this.order(i) > key), 0, item);
     }
     if (this.list.length > most) {
-      for (const dropped of this.list.splice(0, this.list.length - most)) this.at.delete(dropped.id);
+      for (const dropped of this.list.splice(0, this.list.length - most)) this.known.delete(dropped.id);
     }
   }
 }
 
 /** A thread while frames are being applied to it; `Thread` is what is shown. */
 class Working {
-  messages = new Ordered<Message>();
-  facts = new Ordered<Fact>();
-  steps = new Ordered<Fact>();
+  // Messages in the order they were sent; facts in the order they reached this kernel.
+  messages = new Ordered<Message>((m) => m.at);
+  facts = new Ordered<Fact>((f) => f.id);
+  steps = new Ordered<Fact>((f) => f.id);
   more = false;
   loaded = false;
   problem = '';
@@ -186,9 +195,9 @@ const handlers: Record<string, Handler> = {
     store.changed.map = true;
   },
   gone(store, frame) {
-    store.work.processes.delete(frame.name);
+    store.work.processes.delete(frame.id);
     for (const [key, edge] of store.work.edges) {
-      if (edge.a === frame.name || edge.b === frame.name) store.work.edges.delete(key);
+      if (edge.a === frame.id || edge.b === frame.id) store.work.edges.delete(key);
     }
     store.changed.map = true;
   },
@@ -259,10 +268,10 @@ class Store {
   /** What the reader asked to have lit on the map, at every level; null for nothing in particular. */
   light = $state<Step | null>(remembered<Step | null>('jarvis.light', null));
 
-  /** For each sender, the newest message to the human that has been read. */
-  private seen = $state<Record<string, number>>(remembered('jarvis.seen', {}));
-  /** Everything up to this message counts as read (set the first time the page is opened). */
-  private seenAll = $state<number | null>(remembered<number | null>('jarvis.seenAll', null));
+  /** For each sender, when the newest message to the human that has been read was sent. */
+  private seen = $state<Record<string, number>>(remembered('jarvis.read', {}));
+  /** Everything sent up to this moment counts as read (set the first time the page is opened). */
+  private seenAll = $state<number | null>(remembered<number | null>('jarvis.readAll', null));
   private feed: Feed | null = null;
 
   byName = $derived(new Map(this.processes.map((p) => [p.id, p])));
@@ -280,12 +289,19 @@ class Store {
     return address === HUMAN || this.byName.has(address);
   }
 
+  /** The kernel this page is on. */
+  kernel = $derived(this.me.split('@')[1] ?? '');
+
+  /** What to call someone: `you`, or a process's name, with its kernel when that is not this page's. */
   label(address: string): string {
-    return address === HUMAN ? 'you' : address;
+    const [name, kernel] = address.split('@');
+    if (name === HUMAN) return 'you';
+    if (name === KERNEL) return kernel ? `kernel ${kernel}` : KERNEL;
+    return kernel && kernel === this.kernel ? name : address;
   }
 
   isUnread(m: Message): boolean {
-    return m.to === HUMAN && m.id > (this.seenAll ?? Infinity) && m.id > (this.seen[m.from] ?? 0);
+    return m.to === HUMAN && m.at > (this.seenAll ?? Infinity) && m.at > (this.seen[m.from] ?? 0);
   }
 
   unreadFrom(sender: string): number {
@@ -295,14 +311,14 @@ class Store {
   /** The reader has looked at what `sender` wrote to them. */
   markRead(sender: string) {
     const newest = this.thread('inbox').messages.findLast((m) => m.from === sender);
-    if (!newest || (this.seen[sender] ?? 0) >= newest.id) return;
-    this.seen = { ...this.seen, [sender]: newest.id };
-    remember('jarvis.seen', this.seen);
+    if (!newest || (this.seen[sender] ?? 0) >= newest.at) return;
+    this.seen = { ...this.seen, [sender]: newest.at };
+    remember('jarvis.read', this.seen);
   }
 
   markAllRead() {
-    this.seenAll = this.thread('inbox').messages.at(-1)?.id ?? 0;
-    remember('jarvis.seenAll', this.seenAll);
+    this.seenAll = this.thread('inbox').messages.at(-1)?.at ?? 0;
+    remember('jarvis.readAll', this.seenAll);
   }
 
   /** What a process belongs to: what jarvis knows about it, and the tags it was given. */

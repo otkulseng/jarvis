@@ -8,8 +8,8 @@
 //!   GET  /api/stream?topics=T1,T2    what changes, pushed as it happens
 //!        (server-sent events; each event is a JSON list of frames). `map`
 //!        and `inbox` are always included. Frames and topics: `model.rs`.
-//!   GET  /api/older?topic=T&before=N           earlier messages of a topic
-//!   GET  /api/steps?who=NAME&after=A&before=B  the steps of an earlier turn
+//!   GET  /api/older?topic=T&before=MESSAGE     earlier messages of a topic
+//!   GET  /api/steps?who=ID&after=A&before=B    the steps of an earlier turn
 //!   POST /api/send   {"to": ..., "text": ...}  a message from the human
 //!   POST /api/act    {"action": "stop" | "start" | "remove", "who": ...}
 //!   GET  /api/files?who=NAME                   the files of a process
@@ -111,7 +111,7 @@ async fn stream(State(hub): State<Arc<Hub>>, Query(q): Params) -> Sse<impl Strea
 
 async fn older(Query(q): Params) -> Result<Json<Value>, Failure> {
     let topic = q.get("topic").ok_or_else(|| bad("need `topic`"))?;
-    let before = q.get("before").and_then(|b| b.parse::<i64>().ok());
+    let before = q.get("before").map(String::as_str).filter(|b| !b.is_empty());
     let messages = threads::messages(topic, before).await.map_err(fail)?;
     Ok(Json(json!({"more": messages.len() >= threads::PAGE, "messages": messages})))
 }

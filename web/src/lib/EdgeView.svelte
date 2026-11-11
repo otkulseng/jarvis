@@ -25,11 +25,11 @@
     </a>
     <div>
       <h1>
-        <a href={href(toProcess(a))}>{a}</a>
+        <a href={href(toProcess(a))}>{store.label(a)}</a>
         <svg viewBox="0 0 24 12" width="26" height="13" aria-label="and">
           <path d="M2 6h20M6 2 2 6l4 4M18 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
-        <a href={href(toProcess(b))}>{b}</a>
+        <a href={href(toProcess(b))}>{store.label(b)}</a>
       </h1>
       <p>
         {count} message{count === 1 ? '' : 's'} between them. You are reading along: to take part, open

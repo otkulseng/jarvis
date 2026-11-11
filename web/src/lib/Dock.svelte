@@ -19,7 +19,7 @@
   <header>
     <div class="who">
       <div class="line">
-        <strong>{store.me || 'The page'}</strong>
+        <strong>{store.me ? store.label(store.me) : 'The page'}</strong>
         {#if me}<StatePill proc={me} now={store.now} />{/if}
       </div>
       <span class="sub">the process behind this page</span>
