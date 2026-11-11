@@ -368,30 +368,37 @@ impl Kernel {
         Ok(())
     }
 
-    /// The commit a process is to start from. What the repository does not
-    /// have is fetched from the remote, once.
-    pub(super) fn commit_for(&self, what: &str) -> Res<String> {
+    /// The commit a process is to start from, and anything to say about it.
+    /// What this repository has as its own (a branch, a tag, a commit) is
+    /// used as it is. What is only at the remote `origin` is fetched first,
+    /// each time, so that a process starts from what was last pushed.
+    pub(super) fn commit_for(&self, what: &str) -> Res<(String, Option<String>)> {
         let repo = &self.cfg.repo;
+        if let Some(commit) = repo.commit_of(what) {
+            return Ok((commit, None));
+        }
         let at_remote = format!("origin/{what}");
-        if let Some(commit) = repo.commit_of(what).or_else(|| repo.commit_of(&at_remote)) {
-            return Ok(commit);
-        }
         let fetched = repo.fetch(what);
-        if let Some(commit) = repo.commit_of(&at_remote) {
-            return Ok(commit);
+        // Git's own words, without the command that was run.
+        let why = |e: &dyn std::fmt::Display| e.to_string().rsplit("failed: ").next().unwrap_or("").trim().to_string();
+        match (repo.commit_of(&at_remote), &fetched) {
+            (Some(commit), Ok(())) => Ok((commit, None)),
+            (Some(commit), Err(e)) => Ok((
+                commit,
+                Some(format!("`{what}` could not be fetched from the remote `origin` just now ({}), so it starts from what was fetched earlier, which may be older than what was last pushed", why(e.as_ref()))),
+            )),
+            (None, _) => Err(format!(
+                "`{what}` is not a branch, tag or commit in the repository of the kernel `{}` ({}), and fetching a branch of that name from its remote `origin` did not bring one{}. \
+                 Push it to that remote from where it is (`git push origin {what}`), then try again",
+                self.me,
+                repo.root.display(),
+                match &fetched {
+                    Ok(()) => String::new(),
+                    Err(e) => format!(" ({})", why(e.as_ref())),
+                }
+            )
+            .into()),
         }
-        Err(format!(
-            "`{what}` is not a branch, tag or commit in the repository of the kernel `{}` ({}), and fetching a branch of that name from its remote `origin` did not bring one{}. \
-             Push it to that remote from where it is (`git push origin {what}`), then try again",
-            self.me,
-            repo.root.display(),
-            match fetched {
-                Ok(()) => String::new(),
-                // Git's own words, without the command that was run.
-                Err(e) => format!(" ({})", e.to_string().rsplit("failed: ").next().unwrap_or("").trim()),
-            }
-        )
-        .into())
     }
 
     pub(super) fn spawn(&mut self, args: cli::Spawn, by: &str, prompt: Option<String>) -> Res<Value> {
@@ -430,9 +437,12 @@ impl Kernel {
         if no_agent && prompt.is_some() {
             return Err("a process without an agent has nobody to read a prompt. Leave the prompt out, or choose a harness".into());
         }
-        let start = match &args.from {
-            None => None,
-            Some(what) => Some(self.commit_for(what)?),
+        let (start, start_note) = match &args.from {
+            None => (None, None),
+            Some(what) => {
+                let (commit, note) = self.commit_for(what)?;
+                (Some(commit), note)
+            }
         };
         // It starts from another process's branch: a fork of that process.
         let forked: Option<&String> = args.from.as_ref().filter(|what| what.contains('@'));
@@ -511,7 +521,7 @@ impl Kernel {
             };
             self.tell(&addr, &hello)?;
         }
-        let mut notes = Vec::new();
+        let mut notes: Vec<String> = start_note.into_iter().collect();
         match self.cfg.harness(&args.harness) {
             Some(adapter) if !is_executable(&adapter) => notes.push(format!(
                 "there is no harness adapter `harness/{}` in {}, so its agent cannot run until there is",

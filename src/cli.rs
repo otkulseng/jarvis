@@ -92,8 +92,8 @@ pub enum Cmd {
         \x20                  or `.jarvis/kernel/NAME` in the repository.\n\
         \x20 its socket       where commands reach it: `NAME.sock` in $JARVIS_RUN, or in\n\
         \x20                  `/tmp/jarvis-<uid>`. `jarvis` must look in the same place.\n\n\
-        Ctrl-C, or the signal TERM, stops it, together with every service and every \
-        turn in progress. Nothing is lost: messages that were being worked on are \
+        Ctrl-C, or the signal TERM to its process (`jarvis kernels` shows which), \
+        stops it, together with every service and every turn in progress. Nothing is lost: messages that were being worked on are \
         given again, marked as such, the next time it runs. The same holds if it is \
         killed. Nothing starts a kernel again by itself.")]
     #[command(after_long_help = "Examples:\n\
@@ -121,7 +121,8 @@ pub enum Cmd {
         what is not for them, so two kernels need not be linked directly: a path of \
         links is enough. Making a link takes one side only.\n\n\
         \x20 jarvis link                    list this kernel's links, and why any is down\n\
-        \x20 jarvis link NAME               link to the kernel NAME on this machine\n\
+        \x20 jarvis link NAME               link to the kernel NAME on this machine. For a\n\
+        \x20                                link that is there and down: try it again now\n\
         \x20 jarvis link -- COMMAND ...     link through a command: this kernel runs it, and\n\
         \x20                                talks to the other kernel through its input and\n\
         \x20                                output. The command must end up running\n\
@@ -146,7 +147,11 @@ pub enum Cmd {
     #[command(after_long_help = "Examples:\n\
         \x20 jarvis link node2\n\
         \x20 jarvis link -- ssh -o BatchMode=yes cannon .cargo/bin/jarvis link --stdio\n\
-        \x20 jarvis link -- ssh -o BatchMode=yes cannon srun --jobid=4471 --overlap .cargo/bin/jarvis link --stdio sweep\n\
+        \x20 jarvis link -- ssh -o BatchMode=yes cannon bin/link-into-job sweep\n\
+        \x20     A script of your own on the other machine, here one that finds the job the\n\
+        \x20     kernel `sweep` runs in and starts `jarvis link --stdio sweep` inside it. A\n\
+        \x20     link is made again with the same command each time, so the command must\n\
+        \x20     not name anything that changes, such as a job's number.\n\
         \x20 jarvis link --remove node2")]
     Link(Link),
 
@@ -167,8 +172,11 @@ pub enum Cmd {
         \x20   --from WHAT    The files and history of a branch: an expert's (`page`),\n\
         \x20                  a process's (`lammps@cannon-a`), or any tag or commit.\n\n\
         Code is in git and nowhere else: a process starts from a commit or from \
-        nothing. If the kernel's repository does not have WHAT, it fetches it once \
-        from the remote `origin`; if it is not there either, push it first.\n\n\
+        nothing. WHAT is taken from the repository of the kernel that creates the \
+        process if it is a branch, tag or commit there. Otherwise it is fetched, at \
+        that moment, from the remote `origin`, so the process starts from what was \
+        last pushed; if it is not there either, push it first. Nothing is fetched at \
+        any other time, and nothing is pushed for you.\n\n\
         To move a process to another kernel, spawn it there from its branch here \
         (`jarvis spawn lammps@node2 --from lammps@laptop`), then remove or stop it \
         here. Its files and notes come along; its conversation does not.\n\n\
@@ -358,6 +366,9 @@ pub enum Cmd {
         \x20                                to it (asked of its kernel)\n\
         \x20 jarvis log @cannon-a           what happened on that kernel\n\
         \x20 jarvis log --all               on every kernel known here, by time\n\n\
+        With -f, what was written while a kernel could not be reached is printed when \
+        it can be again, and so after newer lines of other kernels: the time on each \
+        line is when it happened.\n\n\
         --json prints a list of objects: `id` (the record's place in its kernel's \
         order), `kernel`, `n` (its number there; empty for a step), `at`, `proc` (who \
         it is about), `kind` and `data`.")]
@@ -474,9 +485,9 @@ pub struct Spawn {
               conversation: it starts with a fresh memory.\n\n\
               An expert is a branch with a plain name, such as `page`, that its processes \
               land their finished work on. A process's own branch is its address, \
-              `NAME@KERNEL`. WHAT is looked for in the repository of the kernel that creates \
-              the process, then as a branch on its remote `origin`, which is fetched once if \
-              need be.")]
+              `NAME@KERNEL`. WHAT is a branch, tag or commit in the repository of the kernel that \
+              creates the process; or else a branch on its remote `origin`, which is fetched \
+              at that moment.")]
     pub from: Option<String>,
 
     /// Which agent harness runs it: the name of a file in `harness/`, or `none`

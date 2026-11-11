@@ -21,7 +21,18 @@ impl Kernel {
                 return Err("a kernel cannot be linked to itself".into());
             }
         self.db.execute("INSERT OR IGNORE INTO links (spec) VALUES (?1)", [spec])?;
-        self.dials.entry(spec.to_string()).or_insert_with(Dial::new);
+        // Asking for a link that is there already: if it is down, it is tried now.
+        if let Some(dial) = self.dials.get_mut(spec) {
+            let up = dial.link.and_then(|id| self.links.get(&id)).and_then(|l| l.peer.clone());
+            if let Some(peer) = up {
+                return Ok(said(vec![format!("this link is up already, to {peer}")], vec![]));
+            }
+            dial.next_try = Instant::now();
+            dial.wait = Duration::from_secs(2);
+            self.publish_net();
+            return Ok(said(vec!["this link is down; it is tried again now. `jarvis link` shows how it is going".into()], vec![]));
+        }
+        self.dials.insert(spec.to_string(), Dial::new());
         self.publish_net();
         Ok(said(vec!["the link is being made; `jarvis link` shows how it is going".into()], vec![]))
     }

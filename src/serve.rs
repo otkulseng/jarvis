@@ -373,7 +373,9 @@ fn request_of(ctx: &Ctx, out: &mut dyn Out, kernel: &str, by: &str, argv: Vec<St
     let (outcome, came) = mpsc::channel();
     let accepted = ctx.mutate(Mutation::Request { kernel: kernel.to_string(), by: by.to_string(), argv, extra, outcome })?;
     let id = accepted["o"][0].as_str().unwrap_or("").to_string();
-    match came.recv_timeout(REQUEST_PATIENCE) {
+    // A kernel that cannot be reached will not answer soon: say so at once.
+    let patience = if accepted["reachable"] == true { REQUEST_PATIENCE } else { Duration::ZERO };
+    match came.recv_timeout(patience) {
         Ok(result) => {
             print(out, &result);
             Ok(result["code"].as_i64().unwrap_or(1) as i32)
@@ -410,7 +412,8 @@ fn relay(ctx: &Ctx, out: &mut dyn Out, kernel: &str, by: &str, argv: Vec<String>
             print(out, &answer);
             Ok(answer["code"].as_i64().unwrap_or(1) as i32)
         }
-        Ok(Err(why)) => Err(why.into()),
+        // Not an answer about what was asked: the kernel could not be asked.
+        Ok(Err(why)) => Ok(report(out, &[(kernel.to_string(), why)])),
         Err(_) => Err("the kernel here stopped before the answer came".into()),
     }
 }
@@ -673,7 +676,10 @@ fn ps(ctx: &Ctx, by: &str, args: cli::Ps, out: &mut dyn Out) -> Res<i32> {
         return Ok(report(out, &silent));
     }
     if rows.is_empty() {
-        out.line(if silent.is_empty() { "no processes there. `jarvis help spawn` shows how to create one." } else { "no processes" });
+        // Said only when it is known: not when a kernel gave no answer.
+        if silent.is_empty() {
+            out.line("no processes there. `jarvis help spawn` shows how to create one.");
+        }
     } else {
         let wide = rows.iter().map(|r| r["id"].as_str().unwrap_or("").len()).max().unwrap_or(0).max(8);
         out.line(&format!("{:<wide$}  {:<13} {:<20} ABOUT", "PROCESS", "STATE", "MADE BY"));
@@ -771,8 +777,10 @@ fn ps_one(ctx: &Ctx, p: &Proc, as_json: bool, out: &mut dyn Out) -> Res<()> {
 
 fn kernels(ctx: &Ctx, as_json: bool, out: &mut dyn Out) -> Res<()> {
     let net = ctx.shared.net.lock().unwrap().clone();
-    let mut rows = vec![json!({"name": ctx.me, "state": "here", "here": true, "reachable": true, "hops": 0, "via": Value::Null,
-                               "version": cli::VERSION, "closed": false, "last_reached_at": Value::Null})];
+    // A kernel is stopped by a signal to its process (TERM, or Ctrl-C where it runs).
+    let pid = std::process::id();
+    let mut rows = vec![json!({"name": ctx.me, "state": format!("here (process {pid})"), "here": true, "reachable": true, "hops": 0, "via": Value::Null,
+                               "version": cli::VERSION, "closed": false, "last_reached_at": Value::Null, "pid": pid})];
     for reach in &net.reachable {
         let state = match reach.hops {
             1 => "linked".to_string(),
@@ -804,8 +812,15 @@ fn kernels(ctx: &Ctx, as_json: bool, out: &mut dyn Out) -> Res<()> {
     }
     let wide = rows.iter().map(|r| r["name"].as_str().unwrap_or("").len()).max().unwrap_or(0).max(6);
     out.line(&format!("{:<wide$}  {:<24} STATE", "KERNEL", "JARVIS"));
-    for r in rows {
-        out.line(&format!("{:<wide$}  {:<24} {}", r["name"].as_str().unwrap_or(""), r["version"].as_str().unwrap_or("-"), r["state"].as_str().unwrap_or("")));
+    let mut differ = false;
+    for r in &rows {
+        // Kernels of different builds may not understand each other fully.
+        let other = r["version"].as_str().is_some_and(|v| v != cli::VERSION);
+        differ |= other && r["reachable"] == true;
+        out.line(&format!("{:<wide$}  {:<24} {}", r["name"].as_str().unwrap_or(""), format!("{}{}", r["version"].as_str().unwrap_or("-"), if other { " *" } else { "" }), r["state"].as_str().unwrap_or("")));
+    }
+    if differ {
+        out.line("* another build of jarvis than this kernel's. Kernels that talk to each other should be the same build.");
     }
     Ok(())
 }
@@ -976,7 +991,7 @@ fn messages(ctx: &Ctx, by: &str, args: cli::Messages, out: &mut dyn Out) -> Res<
         if args.json {
             out.line(&Value::Array(rows).to_string());
         } else {
-            if rows.is_empty() {
+            if rows.is_empty() && silent.is_empty() {
                 out.line("nobody has written to anybody there yet");
             }
             for r in rows {
@@ -1005,7 +1020,7 @@ fn messages(ctx: &Ctx, by: &str, args: cli::Messages, out: &mut dyn Out) -> Res<
         out.line(&Value::Array(rows.to_vec()).to_string());
         return Ok(report(out, &silent));
     }
-    if rows.is_empty() {
+    if rows.is_empty() && silent.is_empty() {
         out.line(&format!("no messages{}", if args.waiting { " are waiting" } else { "" }));
     }
     for m in rows {
@@ -1184,7 +1199,7 @@ fn log(ctx: &Ctx, by: &str, args: cli::Log, out: &mut dyn Out) -> Res<i32> {
         }
     }
     if !args.follow {
-        if rows.is_empty() {
+        if rows.is_empty() && silent.is_empty() {
             out.line("nothing has happened there yet");
         }
         return Ok(report(out, &silent));
