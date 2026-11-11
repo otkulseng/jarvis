@@ -68,6 +68,7 @@
   <Conversation
     messages={shownMessages}
     steps={shownSteps}
+    facts={selected ? shownFacts : []}
     to={selected ? selected : null}
     {label}
     onsend={(to, text) => send(to, text)}

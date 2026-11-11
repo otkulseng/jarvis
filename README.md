@@ -15,6 +15,10 @@ processes work on their own branches and land finished work on the branch
     three panels.
   - `src/lib/api.ts`: the types of what the server returns, and the two calls.
   - `src/lib/Processes.svelte`, `Conversation.svelte`, `Facts.svelte`: the panels.
+  - `src/lib/turns.ts`: groups an agent's steps into turns and pairs each tool
+    use with its result. `Turn.svelte` draws one turn inside the conversation:
+    folded to one line, or opened to show what the agent said and each tool
+    use, which opens in turn to show its full input and output.
   - `src/app.css`: colours as CSS variables, with a dark variant. Use the
     variables instead of literal colours.
 

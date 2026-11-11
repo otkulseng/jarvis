@@ -1,16 +1,21 @@
 <script lang="ts">
-  import { clock, type Fact, type Message, type StepData } from './api';
+  import { onMount } from 'svelte';
+  import { clock, type Fact, type Message } from './api';
+  import Turn from './Turn.svelte';
+  import { buildTurns, type Turn as TurnData } from './turns';
 
   let {
     messages,
     steps,
+    facts,
     to,
     label,
     onsend,
   }: {
     messages: Message[];
-    /** What the process's agent did inside its turns, shown between the messages. */
+    /** What the process's agent did inside its turns, and the facts that say when turns began and ended. */
     steps: Fact[];
+    facts: Fact[];
     /** Who a new message goes to, or null when no one process is selected. */
     to: string | null;
     label: (address: string) => string;
@@ -21,23 +26,40 @@
   let problem = $state('');
   let list: HTMLDivElement | undefined = $state();
 
-  type Item = { key: string; at: number; message?: Message; step?: Fact };
+  type Item = { key: string; at: number; message?: Message; turn?: TurnData };
 
-  /** Messages and steps as one story, in the order they happened. */
+  const turns = $derived(to ? buildTurns([...facts, ...steps]) : []);
+
+  /** Messages and turns as one story, in the order they began. */
   const items = $derived<Item[]>(
     [
       ...messages.map((m) => ({ key: `m${m.id}`, at: m.at, message: m })),
-      ...steps.map((s) => ({ key: `s${s.id}`, at: s.at, step: s })),
+      ...turns.map((t) => ({ key: t.key, at: t.at, turn: t })),
     ].sort((a, b) => a.at - b.at),
   );
 
-  const stepOf = (fact: Fact) => fact.data as unknown as StepData;
-  const firstLine = (text: string) => text.split('\n').find((line) => line.trim()) ?? '';
+  // The newest turn is open and the earlier ones folded, until the reader says otherwise.
+  let chosen = $state(new Map<string, boolean>());
+  const isOpen = (turn: TurnData) => chosen.get(turn.key) ?? turn === turns.at(-1);
+  function toggle(turn: TurnData) {
+    chosen = new Map(chosen).set(turn.key, !isOpen(turn));
+  }
 
-  // Keep the newest in view.
+  let now = $state(Date.now());
+  onMount(() => {
+    const tick = setInterval(() => (now = Date.now()), 1000);
+    return () => clearInterval(tick);
+  });
+
+  // Follow what is new, but only while the reader is at the bottom already.
+  let following = true;
+  function onscroll() {
+    if (list) following = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
+  }
   $effect(() => {
     items.length;
-    list?.scrollTo({ top: list.scrollHeight });
+    turns.at(-1)?.rows.length;
+    if (following) list?.scrollTo({ top: list.scrollHeight });
   });
 
   async function submit(event: SubmitEvent) {
@@ -62,36 +84,23 @@
 
 <section>
   <h2>{to ? `Conversation with ${label(to)}` : 'All messages'}</h2>
-  <div class="list" bind:this={list}>
+  <div class="list" bind:this={list} {onscroll}>
     {#each items as item (item.key)}
-      {#if item.step}
-        {@const s = stepOf(item.step)}
-        {#if s.step === 'tool'}
-          <div class="step tool"><span class="time">{clock(item.at)}</span><code>{s.text}</code></div>
-        {:else if s.step === 'result'}
-          <details class="step result" class:bad={s.error}>
-            <summary>{firstLine(s.text) || '(nothing)'}</summary>
-            <pre>{s.text}</pre>
-          </details>
-        {:else}
-          <div class="step said" class:thinking={s.step === 'thinking'}>
-            <span class="time">{clock(item.at)}</span>
-            <div class="body">{s.text}</div>
-          </div>
-        {/if}
+      {#if item.turn}
+        <Turn turn={item.turn} who={to ? label(to) : ''} open={isOpen(item.turn)} {now} ontoggle={() => toggle(item.turn!)} />
       {:else if item.message}
         {@const m = item.message}
-      <article class:mine={m.from === 'human'} class:failed={m.status === 'pending' && m.attempts > 0}>
-        <div class="meta">
-          {label(m.from)} → {label(m.to)} · {clock(m.at)}
-          {#if m.status === 'taken'}
-            · being worked on{m.attempts > 1 ? ` (attempt ${m.attempts})` : ''}
-          {:else if m.status === 'pending'}
-            · waiting{m.attempts > 0 ? `: ${m.attempts} turn${m.attempts === 1 ? '' : 's'} on it did not finish` : ''}
-          {/if}
-        </div>
-        <div class="body">{m.body}</div>
-      </article>
+        <article class:mine={m.from === 'human'} class:failed={m.status === 'pending' && m.attempts > 0}>
+          <div class="meta">
+            {label(m.from)} → {label(m.to)} · {clock(m.at)}
+            {#if m.status === 'taken'}
+              · being worked on{m.attempts > 1 ? ` (attempt ${m.attempts})` : ''}
+            {:else if m.status === 'pending'}
+              · waiting{m.attempts > 0 ? `: ${m.attempts} turn${m.attempts === 1 ? '' : 's'} on it did not finish` : ''}
+            {/if}
+          </div>
+          <div class="body">{m.body}</div>
+        </article>
       {/if}
     {:else}
       <p class="empty">Nothing said yet.</p>
@@ -120,6 +129,7 @@
     padding-right: 4px;
   }
   article {
+    box-sizing: border-box;
     max-width: 92%;
     margin-bottom: 10px;
     padding: 8px 12px;
@@ -133,52 +143,6 @@
   }
   article.failed {
     border-color: var(--bad);
-  }
-  /* Steps are the agent at work: smaller and plainer than messages. */
-  .step {
-    max-width: 92%;
-    margin: 0 0 4px 12px;
-    font-size: 12px;
-    color: var(--muted);
-  }
-  .step .time {
-    margin-right: 8px;
-    font-size: 11px;
-    font-variant-numeric: tabular-nums;
-  }
-  .step.said {
-    display: flex;
-    color: var(--text);
-  }
-  .step.thinking {
-    font-style: italic;
-    color: var(--muted);
-  }
-  .step.tool code {
-    overflow-wrap: anywhere;
-  }
-  .step.result {
-    margin-left: 80px;
-  }
-  .step.result summary {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    cursor: pointer;
-  }
-  .step.result.bad summary {
-    color: var(--bad);
-  }
-  .step.result pre {
-    max-height: 320px;
-    margin: 4px 0 8px;
-    padding: 8px;
-    overflow: auto;
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    background: var(--panel);
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
   }
   .meta {
     margin-bottom: 2px;

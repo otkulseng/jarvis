@@ -50,6 +50,11 @@ export interface StepData {
   text: string;
   /** For `result`: the tool reported an error. */
   error?: boolean;
+  /** For `tool`: its name and what it was given (null when that was too long to record). */
+  tool?: string;
+  input?: Record<string, unknown> | null;
+  /** The same on a `tool` step and on the `result` that answers it. */
+  id?: string;
 }
 
 export const isStep = (fact: Fact) => fact.kind === 'step';
