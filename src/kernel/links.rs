@@ -282,6 +282,10 @@ impl Kernel {
         let same = best.len() == self.table.len()
             && best.iter().all(|(name, new)| self.table.get(name).is_some_and(|old| old.link == new.link && old.hops == new.hops && old.version == new.version));
         if !same {
+            // A kernel that drops out of reach was last reached just now.
+            for name in self.table.keys().filter(|name| !best.contains_key(*name)) {
+                let _ = self.db.execute("UPDATE kernels SET last_reached = ?2 WHERE name = ?1", params![name, index::now_ms()]);
+            }
             self.table = best;
             self.routes_changed();
         }
