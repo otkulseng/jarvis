@@ -1,0 +1,11 @@
+#!/usr/bin/env python3
+"""The code of a test process that has no agent. It answers a message that
+starts with `ping` and declines everything else (exit 3: not mine)."""
+import json, subprocess, sys
+
+message = json.load(sys.stdin)
+if not message["body"].startswith("ping"):
+    sys.exit(3)
+sent = subprocess.run(["jarvis", "send", message["from"], "probe got: " + message["body"]], capture_output=True, text=True)
+if sent.returncode != 0:
+    sys.exit("could not answer %s: %s" % (message["from"], sent.stderr.strip()))

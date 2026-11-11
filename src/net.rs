@@ -79,7 +79,7 @@ fn connect(spec: &str, id: u64, cfg: &Config, tx: &Sender<Event>) -> Res<String>
     let spec = Some(spec.to_string());
     if let Some(kernel) = v["kernel"].as_str() {
         let mut stream = UnixStream::connect(cfg.run_dir.join(format!("{kernel}.sock")))
-            .map_err(|_| format!("no kernel called `{kernel}` is running on this machine"))?;
+            .map_err(|_| format!("no kernel called `{kernel}` is running on this machine (its socket would be in {})", cfg.run_dir.display()))?;
         stream.write_all(b"{\"link\":true}\n")?;
         let (out, closer) = (stream.try_clone()?, stream.try_clone()?);
         let close: Close = Box::new(move || {
@@ -90,21 +90,39 @@ fn connect(spec: &str, id: u64, cfg: &Config, tx: &Sender<Event>) -> Res<String>
     }
     let words: Vec<String> = v["command"].as_array().map(|a| a.iter().filter_map(|w| w.as_str().map(str::to_string)).collect()).unwrap_or_default();
     let Some((program, args)) = words.split_first() else { return Err("the link names neither a kernel nor a command".into()) };
-    // Whatever the command prints as errors (ssh's complaints, say) shows up
-    // where the kernel's own messages do.
     let mut child = Command::new(program)
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::piped())
         .process_group(0)
         .spawn()
         .map_err(|e| format!("could not run `{program}`: {e}"))?;
     let pid = child.id();
+    // What the command prints as errors (ssh's complaints, say) is the reason
+    // when the link fails, so its last lines are kept.
+    let errors = child.stderr.take().expect("stderr is piped");
+    let said = thread::spawn(move || {
+        let mut last: Vec<String> = Vec::new();
+        for line in BufReader::new(errors).lines().map_while(Result::ok) {
+            if !line.trim().is_empty() {
+                last.push(line.trim_end().to_string());
+                if last.len() > 8 {
+                    last.remove(0);
+                }
+            }
+        }
+        last.join(" / ")
+    });
     let close: Close = Box::new(move || children::signal(pid, libc::SIGKILL));
     tx.send(Event::LinkOpen { id, spec, tx: writer(child.stdin.take().expect("stdin is piped")), close }).map_err(|_| "the kernel is stopping")?;
     let why = pump(id, BufReader::new(child.stdout.take().expect("stdout is piped")), tx);
     children::signal(pid, libc::SIGKILL);
     let status = child.wait().map(|s| s.to_string()).unwrap_or_default();
-    Ok(format!("{why} (the command ended: {status})"))
+    let said = said.join().unwrap_or_default();
+    Ok(if said.is_empty() {
+        format!("{why}; the command ended with {status} and printed no error")
+    } else {
+        format!("the command said: {said} ({status})")
+    })
 }

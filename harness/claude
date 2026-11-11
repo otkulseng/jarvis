@@ -21,7 +21,11 @@ the same for every harness, so the kernel knows nothing about any of them:
                              Then, as the last line, how the turn ended:
                                {"session": id to continue next time,
                                 "reply":   what the agent said last,
-                                ...anything else worth recording (cost, time)}
+                                "cost_usd": what this turn cost, if known; or
+                                "cost_usd_session": what the whole session has
+                                           cost so far, from which the kernel
+                                           works out this turn's share,
+                                ...anything else worth recording (time)}
        exit code             non-zero if the agent could not run
 
 To support another harness, add another executable next to this one and
@@ -233,7 +237,8 @@ def main():
         "session": out.get("session_id"),
         "reply": out.get("result") or "",
         "harness": "claude",
-        "cost_usd": out.get("total_cost_usd"),
+        # Claude Code reports what the session has cost in all, not this turn.
+        "cost_usd_session": out.get("total_cost_usd"),
         "duration_ms": out.get("duration_ms"),
         "turns": out.get("num_turns"),
         "session_lost": session_lost,

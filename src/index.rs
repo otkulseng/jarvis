@@ -1,22 +1,25 @@
 //! Records, and the database built from them.
 //!
-//! Everything that happens is a *record*: a message sent, a turn finished, a
-//! process created. A record is written once, by one kernel, and never
-//! changed. It is named by that kernel and its number there (`laptop:412`),
-//! so two copies of a record are always the same record, and records from
-//! any number of kernels can be put together in any order.
+//! A kernel writes down everything that happens to it as a *record*: a
+//! message sent, a turn finished, a process created. A record is written
+//! once and never changed, and the kernel numbers its records 1, 2, 3, ...
+//! without gaps, so a record is named by its kernel and number
+//! (`laptop:412`).
 //!
-//! The database is what the records add up to: who exists, what state each
-//! process is in, which messages wait. `apply` is the one place that decides
-//! what a record means for it. A kernel applies its own records as it writes
-//! them and other kernels' as it reads them from the store; a reader without
-//! a kernel builds the same database from the store alone.
+//! The database is what the kernel's records add up to: which processes it
+//! hosts, what state each is in, which messages wait. `apply` is the one
+//! place that decides what a record means for it.
 //!
-//! A kernel's database also holds what only that kernel needs while it runs
-//! (the programs it started, messages it holds for other kernels, its links).
+//! A kernel's database holds that kernel's own records and state, and
+//! nothing of any other kernel except the messages exchanged with them and
+//! the names of the kernels it has heard of. What another kernel knows is
+//! asked of that kernel.
+//!
+//! The database also holds what the kernel needs only while it runs (the
+//! programs it started, what it holds for other kernels, its links).
 
 use rusqlite::{Connection, OptionalExtension, params};
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -24,28 +27,31 @@ pub type Res<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 /// Names that are not processes. `human@K` is the person, as seen from
 /// kernel K; `kernel@K` is the kernel itself. Mail to them is kept and never
-/// handed to an agent.
+/// handed to an agent. A message to `kernel@K` that carries a request (stop
+/// this process, create that one) is carried out by the kernel K.
 pub const HUMAN: &str = "human";
 pub const KERNEL: &str = "kernel";
 
 /// Changed whenever the tables change, so an old database is refused with a
 /// clear message instead of failing in some odd way later.
-const VERSION: i64 = 3;
+const VERSION: i64 = 4;
 
 const SCHEMA: &str = "
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
--- Every record this database has seen. `seq` is the order they were seen in
--- here. `n` is empty for what is kept here only (the steps of a turn).
+-- This kernel's records, in the order they were written (`seq`). `n` is the
+-- record's number; it is empty for the steps of a turn, which are many and
+-- are kept apart from the numbered records.
 CREATE TABLE records (
     seq INTEGER PRIMARY KEY AUTOINCREMENT,
     k TEXT NOT NULL, n INTEGER, at INTEGER NOT NULL,
     kind TEXT NOT NULL, proc TEXT NOT NULL, data TEXT NOT NULL,
     UNIQUE (k, n));
 CREATE INDEX records_by_proc ON records (proc, kind, seq);
+-- The other kernels this one has heard of over its links.
 CREATE TABLE kernels (
-    name TEXT PRIMARY KEY, identity TEXT, created_at INTEGER,
+    name TEXT PRIMARY KEY, identity TEXT, version TEXT,
     closed INTEGER NOT NULL DEFAULT 0, closed_by TEXT,
-    last_at INTEGER NOT NULL DEFAULT 0, last_n INTEGER NOT NULL DEFAULT 0);
+    last_reached INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE procs (
     addr TEXT PRIMARY KEY, name TEXT NOT NULL, kernel TEXT NOT NULL,
     branch TEXT NOT NULL, harness TEXT NOT NULL, session TEXT,
@@ -60,13 +66,14 @@ CREATE TABLE messages (
     sender TEXT NOT NULL, recipient TEXT NOT NULL,
     sn TEXT NOT NULL, rn TEXT NOT NULL, rk TEXT NOT NULL,
     body TEXT NOT NULL, status TEXT NOT NULL,
-    attempts INTEGER NOT NULL DEFAULT 0, turn INTEGER);
+    attempts INTEGER NOT NULL DEFAULT 0, turn INTEGER,
+    -- For a request to a kernel: what the kernel answered.
+    result TEXT);
 CREATE INDEX messages_waiting ON messages (recipient, status, seq);
 CREATE INDEX messages_by_at ON messages (at, id);
 CREATE INDEX messages_by_sn ON messages (sn, seq);
 CREATE INDEX messages_by_rn ON messages (rn, seq);
--- Files of the store that were read already.
--- What only the kernel that owns this database needs.
+-- What the kernel needs only while it runs.
 CREATE TABLE children (pid INTEGER PRIMARY KEY, started TEXT NOT NULL, proc TEXT NOT NULL, kind TEXT NOT NULL);
 CREATE TABLE outbox (id TEXT PRIMARY KEY, dest TEXT NOT NULL, payload TEXT NOT NULL);
 CREATE TABLE seen (id TEXT PRIMARY KEY);
@@ -82,7 +89,8 @@ pub fn open(path: &Path) -> Res<Connection> {
     Ok(conn)
 }
 
-/// A database that lives only as long as the command that made it.
+/// A database that lives only as long as the test that made it.
+#[cfg(test)]
 pub fn open_memory() -> Res<Connection> {
     let conn = Connection::open_in_memory()?;
     prepare(&conn, "memory")?;
@@ -96,7 +104,7 @@ fn prepare(conn: &Connection, what: &str) -> Res<()> {
     }
     let tables: i64 = conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'", [], |r| r.get(0))?;
     if version != 0 || tables != 0 {
-        return Err(format!("{what} was made by a different version of jarvis. Move that kernel's directory aside, or start a kernel under a new name.").into());
+        return Err(format!("{what} was made by a different version of jarvis and cannot be used by this one. Delete or move that kernel's directory, then start the kernel again.").into());
     }
     conn.execute_batch(&format!("BEGIN; {SCHEMA} PRAGMA user_version = {VERSION}; COMMIT;"))?;
     Ok(())
@@ -141,6 +149,15 @@ pub fn kernel_of(addr: &str) -> &str {
     addr.split_once('@').map_or("", |(_, kernel)| kernel)
 }
 
+/// The two halves of an address, `name@kernel`. Everything is named in full:
+/// a bare name is refused, with `what` saying what was expected.
+pub fn address<'a>(text: &'a str, what: &str) -> Res<(&'a str, &'a str)> {
+    match text.split_once('@') {
+        Some((name, kernel)) if !name.is_empty() && !kernel.is_empty() && !kernel.contains('@') => Ok((name, kernel)),
+        _ => Err(format!("`{text}` is not an address. A {what} is named in full, as NAME@KERNEL (`jarvis kernels` lists the kernels, `jarvis ps --all` the processes)").into()),
+    }
+}
+
 /// Whether mail to this address is only kept, never handed to an agent.
 pub fn is_person(addr: &str) -> bool {
     matches!(name_of(addr), HUMAN | KERNEL)
@@ -170,23 +187,6 @@ pub struct Rec {
     pub data: Value,
 }
 
-impl Rec {
-    pub fn to_value(&self) -> Value {
-        json!({"k": self.k, "n": self.n, "at": self.at, "kind": self.kind, "proc": self.proc, "data": self.data})
-    }
-
-    pub fn from_value(v: &Value) -> Option<Rec> {
-        Some(Rec {
-            k: v["k"].as_str()?.to_string(),
-            n: v["n"].as_i64(),
-            at: v["at"].as_i64()?,
-            kind: v["kind"].as_str()?.to_string(),
-            proc: v["proc"].as_str().unwrap_or("").to_string(),
-            data: v["data"].clone(),
-        })
-    }
-}
-
 /// Add a record. Returns where it landed in this database's order, or `None`
 /// if it was here already (then nothing changes).
 pub fn insert(conn: &Connection, r: &Rec) -> Res<Option<i64>> {
@@ -214,13 +214,6 @@ fn ids(d: &Value, key: &str) -> Vec<String> {
 fn apply(conn: &Connection, r: &Rec, seq: i64) -> Res<()> {
     let d = &r.data;
     let text = |key: &str| d[key].as_str().unwrap_or("");
-    if let Some(n) = r.n {
-        conn.prepare_cached(
-            "INSERT INTO kernels (name, last_at, last_n) VALUES (?1, ?2, ?3)
-             ON CONFLICT(name) DO UPDATE SET last_at = MAX(last_at, excluded.last_at), last_n = MAX(last_n, excluded.last_n)",
-        )?
-        .execute(params![r.k, r.at, n])?;
-    }
     // A turn is over, however it ended: what it had not dealt with waits again.
     let turn_over = |failures: Option<i64>| -> Res<()> {
         conn.execute(
@@ -237,20 +230,15 @@ fn apply(conn: &Connection, r: &Rec, seq: i64) -> Res<()> {
         Ok(())
     };
     match r.kind.as_str() {
-        "kernel" => {
-            conn.execute("UPDATE kernels SET identity = ?2, created_at = ?3 WHERE name = ?1", params![r.k, text("identity"), r.at])?;
-        }
         "up" => {
-            // Whatever it was in the middle of when it last stopped is over.
-            conn.execute("UPDATE kernels SET closed = 0, closed_by = NULL WHERE name = ?1", [&r.k])?;
-            conn.execute("UPDATE procs SET busy = 0, busy_since = NULL, failures = 0 WHERE kernel = ?1", [&r.k])?;
-            conn.execute("UPDATE messages SET status = 'pending' WHERE rk = ?1 AND status = 'taken'", [&r.k])?;
+            // Whatever the kernel was in the middle of when it last stopped is over.
+            conn.execute("UPDATE procs SET busy = 0, busy_since = NULL, failures = 0", [])?;
+            conn.execute("UPDATE messages SET status = 'pending' WHERE status = 'taken'", [])?;
         }
-        "closed" => {
-            let which = if text("kernel").is_empty() { r.k.as_str() } else { text("kernel") };
-            conn.execute("INSERT OR IGNORE INTO kernels (name) VALUES (?1)", [which])?;
-            conn.execute("UPDATE kernels SET closed = 1, closed_by = ?2 WHERE name = ?1", params![which, text("by")])?;
-            conn.execute("UPDATE procs SET busy = 0, busy_since = NULL WHERE kernel = ?1", [which])?;
+        // Someone said they take another kernel to be gone.
+        "closed" if !text("kernel").is_empty() => {
+            conn.execute("INSERT OR IGNORE INTO kernels (name) VALUES (?1)", [text("kernel")])?;
+            conn.execute("UPDATE kernels SET closed = 1, closed_by = ?2 WHERE name = ?1", params![text("kernel"), text("by")])?;
         }
         "spawn" => {
             conn.execute(
@@ -281,12 +269,13 @@ fn apply(conn: &Connection, r: &Rec, seq: i64) -> Res<()> {
             if id.is_empty() || to.is_empty() {
                 return Ok(());
             }
-            // It has arrived when the kernel that wrote this is the recipient's.
+            // It has arrived when this kernel is the recipient's. Mail to a
+            // person is only kept; a request to the kernel waits to be carried out.
             let here = kernel_of(to) == r.k;
-            let status = match (here, is_person(to)) {
-                (true, true) => "handled",
-                (true, false) => "pending",
-                (false, _) => "sent",
+            let status = match (here, is_person(to), d["request"].is_object()) {
+                (true, true, false) => "handled",
+                (true, _, _) => "pending",
+                (false, _, _) => "sent",
             };
             conn.prepare_cached(
                 "INSERT INTO messages (id, seq, at, sender, recipient, sn, rn, rk, body, status, turn)
@@ -313,9 +302,28 @@ fn apply(conn: &Connection, r: &Rec, seq: i64) -> Res<()> {
         }
         "undeliverable" => {
             conn.execute(
-                "UPDATE messages SET status = 'undeliverable' WHERE id = ?1 AND status IN ('sent', 'forwarded', 'pending')",
+                "UPDATE messages SET status = 'undeliverable' WHERE id = ?1 AND status IN ('sent', 'forwarded', 'pending', 'taken')",
                 [text("message")],
             )?;
+        }
+        // The kernel a message went to says how far it got there. A message
+        // that is dealt with stays so, whatever arrives late.
+        "receipt" => {
+            let status = text("status");
+            let open = match status {
+                "pending" => "('sent', 'forwarded')",
+                "handled" | "failed" | "dropped" | "undeliverable" => "('sent', 'forwarded', 'pending')",
+                _ => return Ok(()),
+            };
+            conn.execute(
+                &format!("UPDATE messages SET status = ?2, result = COALESCE(?3, result) WHERE id = ?1 AND status IN {open}"),
+                params![text("message"), status, d["result"].as_str()],
+            )?;
+        }
+        // This kernel carried out a request that was sent to it.
+        "request_done" => {
+            let status = if d["code"].as_i64() == Some(0) { "handled" } else { "failed" };
+            conn.execute("UPDATE messages SET status = ?2, result = ?3 WHERE id = ?1", params![text("message"), status, text("result")])?;
         }
         "turn_start" => {
             conn.execute("UPDATE procs SET busy = 1, busy_since = ?2 WHERE addr = ?1", params![r.proc, r.at])?;
@@ -395,15 +403,10 @@ fn proc_from_row(r: &rusqlite::Row) -> rusqlite::Result<Proc> {
     })
 }
 
-/// Every process that was not removed, on kernels that have not closed
-/// (`all`: on closed ones too).
-pub fn procs(conn: &Connection, all: bool) -> Res<Vec<Proc>> {
-    let mut stmt = conn.prepare_cached(&format!(
-        "SELECT {PROC_COLUMNS} FROM procs WHERE status != 'removed'
-           AND (?1 OR NOT COALESCE((SELECT closed FROM kernels WHERE name = procs.kernel), 0))
-         ORDER BY created_at, addr"
-    ))?;
-    let rows = stmt.query_map([all], proc_from_row)?.collect::<Result<_, _>>()?;
+/// Every process of this kernel that was not removed.
+pub fn procs(conn: &Connection) -> Res<Vec<Proc>> {
+    let mut stmt = conn.prepare_cached(&format!("SELECT {PROC_COLUMNS} FROM procs WHERE status != 'removed' ORDER BY created_at, addr"))?;
+    let rows = stmt.query_map([], proc_from_row)?.collect::<Result<_, _>>()?;
     Ok(rows)
 }
 
@@ -415,11 +418,7 @@ pub fn find_proc(conn: &Connection, addr: &str) -> Res<Option<Proc>> {
         .optional()?)
 }
 
-/// The processes called `name`, on any kernel that has not closed.
-pub fn procs_named(conn: &Connection, name: &str) -> Res<Vec<Proc>> {
-    Ok(procs(conn, false)?.into_iter().filter(|p| p.name == name).collect())
-}
-
+/// Whether someone here said they take this kernel to be gone.
 pub fn kernel_closed(conn: &Connection, name: &str) -> bool {
     conn.query_row("SELECT closed FROM kernels WHERE name = ?1", [name], |r| r.get::<_, i64>(0)).map(|c| c != 0).unwrap_or(false)
 }
@@ -427,6 +426,7 @@ pub fn kernel_closed(conn: &Connection, name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn rec(k: &str, n: i64, kind: &str, proc: &str, data: Value) -> Rec {
         Rec { k: k.into(), n: Some(n), at: n, kind: kind.into(), proc: proc.into(), data }
@@ -447,28 +447,32 @@ mod tests {
     }
 
     #[test]
-    fn a_message_between_kernels_whatever_order_the_logs_are_read_in() {
-        let send = rec("a", 1, "send", "x@a", json!({"id": "a:1", "from": "x@a", "to": "y@b", "body": "hi"}));
-        let forward = rec("a", 2, "forward", "x@a", json!({"message": "a:1", "next": "b"}));
-        let arrive = rec("b", 1, "arrive", "y@b", json!({"id": "a:1", "from": "x@a", "to": "y@b", "body": "hi"}));
-        let start = rec("b", 2, "turn_start", "y@b", json!({"messages": ["a:1"]}));
-        let turn = rec("b", 3, "turn", "y@b", json!({"messages": ["a:1"], "reply": "ok"}));
+    fn a_message_to_another_kernel_is_followed_by_what_that_kernel_says() {
+        let conn = open_memory().unwrap();
+        insert(&conn, &rec("a", 1, "send", "x@a", json!({"id": "a:1", "from": "x@a", "to": "y@b", "body": "hi"}))).unwrap();
+        assert_eq!(status(&conn, "a:1"), "sent");
+        insert(&conn, &rec("a", 2, "forward", "x@a", json!({"message": "a:1", "next": "b"}))).unwrap();
+        assert_eq!(status(&conn, "a:1"), "forwarded");
+        insert(&conn, &rec("a", 3, "receipt", "x@a", json!({"message": "a:1", "status": "pending"}))).unwrap();
+        assert_eq!(status(&conn, "a:1"), "pending");
+        insert(&conn, &rec("a", 4, "receipt", "x@a", json!({"message": "a:1", "status": "handled"}))).unwrap();
+        assert_eq!(status(&conn, "a:1"), "handled");
+        // What arrives late does not undo it.
+        insert(&conn, &rec("a", 5, "receipt", "x@a", json!({"message": "a:1", "status": "pending"}))).unwrap();
+        assert_eq!(status(&conn, "a:1"), "handled");
+    }
 
-        let sender_first = open_memory().unwrap();
-        insert(&sender_first, &send).unwrap();
-        assert_eq!(status(&sender_first, "a:1"), "sent");
-        insert(&sender_first, &forward).unwrap();
-        assert_eq!(status(&sender_first, "a:1"), "forwarded");
-        for r in [&arrive, &start, &turn] {
-            insert(&sender_first, r).unwrap();
-        }
-        assert_eq!(status(&sender_first, "a:1"), "handled");
-
-        let recipient_first = open_memory().unwrap();
-        for r in [&arrive, &start, &turn, &send, &forward] {
-            insert(&recipient_first, r).unwrap();
-        }
-        assert_eq!(status(&recipient_first, "a:1"), "handled");
+    #[test]
+    fn a_request_waits_until_the_kernel_has_carried_it_out() {
+        let conn = open_memory().unwrap();
+        let request = json!({"id": "a:1", "from": "x@a", "to": "kernel@b", "body": "stop y@b", "request": {"argv": ["stop", "y@b"]}});
+        insert(&conn, &rec("b", 1, "arrive", "kernel@b", request)).unwrap();
+        assert_eq!(status(&conn, "a:1"), "pending");
+        insert(&conn, &rec("b", 2, "request_done", "kernel@b", json!({"message": "a:1", "code": 0, "result": "y@b is stopped"}))).unwrap();
+        assert_eq!(status(&conn, "a:1"), "handled");
+        // Ordinary mail to a kernel or a person is only kept.
+        insert(&conn, &rec("b", 3, "arrive", "human@b", json!({"id": "a:2", "from": "x@a", "to": "human@b", "body": "hi"}))).unwrap();
+        assert_eq!(status(&conn, "a:2"), "handled");
     }
 
     #[test]

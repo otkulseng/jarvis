@@ -72,6 +72,19 @@ impl Repo {
         self.git(&["rev-parse", "--verify", "--quiet", &format!("{what}^{{commit}}")]).ok()
     }
 
+    /// Get one branch from the remote `origin`, as `origin/BRANCH`. Never asks
+    /// for a password and does not wait long for a remote that is not there.
+    pub fn fetch(&self, branch: &str) -> Res<()> {
+        let mut command = Command::new("git");
+        command
+            .arg("--git-dir")
+            .arg(&self.git_dir)
+            .current_dir(&self.root)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes -o ConnectTimeout=10");
+        run(command, &["fetch", "--quiet", "origin", &format!("+refs/heads/{branch}:refs/remotes/origin/{branch}")], None).map(|_| ())
+    }
+
     pub fn has_branch(&self, branch: &str) -> bool {
         self.git(&["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).is_ok()
     }

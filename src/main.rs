@@ -1,12 +1,10 @@
 //! `jarvis`: one command, used the same way by the human, by agents and by
 //! process code.
 //!
-//! `jarvis up NAME` is a kernel (`kernel.rs`). Every other command is sent,
-//! as it was typed, to a kernel on this machine over its socket, and what the
-//! kernel answers is printed (`serve.rs` is the other end). Three things are
-//! done right here instead: being the far end of a link (`link --stdio`),
-//! reading a store that has no kernel (`--store DIR`), and looking after a
-//! store's files (`store compact`, `store merge`).
+//! `jarvis up NAME` is a kernel (`kernel/`). Every other command is sent, as
+//! it was typed, to a kernel on this machine over its socket, and what the
+//! kernel answers is printed (`serve.rs` is the other end). One thing is done
+//! right here instead: being the far end of a link (`link --stdio`).
 //!
 //! The commands and their help are defined in `cli.rs`.
 
@@ -17,10 +15,9 @@ mod index;
 mod kernel;
 mod net;
 mod serve;
-mod store;
 
 use clap::{CommandFactory, FromArgMatches};
-use cli::{Cli, Cmd, StoreCmd};
+use cli::{Cli, Cmd};
 use index::Res;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, IsTerminal, Read, Write};
@@ -29,7 +26,8 @@ use std::path::{Path, PathBuf};
 
 fn main() {
     // A reader that stops reading (`jarvis log | head`) ends this program
-    // quietly, as it does any other command-line program.
+    // quietly, as it does any other command-line program. (A kernel asks for
+    // the opposite when it starts: see `kernel::up`.)
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
@@ -49,78 +47,21 @@ fn main() {
     }
 }
 
-struct ToTerminal;
-
-impl serve::Out for ToTerminal {
-    fn line(&mut self, text: &str) -> bool {
-        writeln!(std::io::stdout(), "{text}").is_ok()
-    }
-    fn note(&mut self, text: &str) {
-        eprintln!("{text}");
-    }
-}
-
 fn run(cli: Cli) -> Res<i32> {
-    let here = std::env::current_dir()?;
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let command = cli.command.expect("there is a command");
-    let given_store = cli.store.as_deref().map(|dir| here.join(dir));
-
-    match command {
-        Cmd::Up(args) => {
-            kernel::up(args, cli.store)?;
+    match &command {
+        Cmd::Up(_) => {
+            let Cmd::Up(args) = command else { unreachable!() };
+            kernel::up(args)?;
             return Ok(0);
         }
-        Cmd::Link(ref args) if args.stdio => return bridge(&cli.on),
-        // Looking after a store's files needs no kernel when the store is named.
-        Cmd::Store(ref args) if !matches!(args.what, StoreCmd::Ship) => {
-            let named = given_store.clone().or_else(|| match socket(&cli.on) {
-                Ok(_) => None,
-                Err(_) => std::env::var("JARVIS_STORE").ok().filter(|s| !s.is_empty()).map(PathBuf::from),
-            });
-            if let Some(dir) = named {
-                println!("{}", match &args.what {
-                    StoreCmd::Compact { kernels } => {
-                        if kernels.is_empty() {
-                            return Err("with no kernel running here, say whose records to compact: `jarvis store compact KERNEL --store DIR`".into());
-                        }
-                        kernels.iter().map(|k| store::compact(&dir, k)).collect::<Res<Vec<_>>>()?.join("\n")
-                    }
-                    StoreCmd::Merge { other } => store::merge(&dir, &here.join(other))?,
-                    StoreCmd::Ship => unreachable!(),
-                });
-                return Ok(0);
-            }
-        }
+        Cmd::Link(args) if args.stdio => return bridge(args.kernel.as_deref()),
         _ => {}
     }
 
-    // Reading a store directly: build what its records add up to, and answer from that.
-    if let Some(dir) = given_store {
-        if !serve::reads_only(&command) {
-            return Err("with --store, only `ps`, `messages`, `log`, `kernels` and `show` can be used: they read, and a store alone cannot do more".into());
-        }
-        if !dir.is_dir() {
-            return Err(format!("{} is not a directory", dir.display()).into());
-        }
-        let conn = index::open_memory()?;
-        store::Store::open(&dir, &conn)?.ingest(&conn, None)?;
-        let ctx = serve::Ctx::of_store(conn, git::Repo::find(&here).ok());
-        // The store was named for this command, not for a kernel: it is not passed on.
-        let mut argv = argv;
-        if let Some(at) = argv.iter().position(|a| a == "--store") {
-            argv.drain(at..(at + 2).min(argv.len()));
-        }
-        argv.retain(|a| !a.starts_with("--store="));
-        return Ok(serve::handle(&ctx, &json!({"argv": argv}), &mut ToTerminal));
-    }
-
     // Everything else is done by a kernel.
-    let mut request = json!({
-        "argv": argv,
-        "by": std::env::var("JARVIS_ID").unwrap_or_default(),
-        "cwd": here.display().to_string(),
-    });
+    let mut request = json!({"argv": argv, "by": std::env::var("JARVIS_ID").unwrap_or_default()});
     match &command {
         Cmd::Send(args) => {
             let text = args.text.join(" ");
@@ -141,7 +82,7 @@ fn run(cli: Cli) -> Res<i32> {
         }
         _ => {}
     }
-    let mut stream = UnixStream::connect(socket(&cli.on)?)?;
+    let mut stream = UnixStream::connect(socket(None)?)?;
     writeln!(stream, "{request}")?;
     for line in BufReader::new(stream).lines() {
         let Ok(answer) = serde_json::from_str::<Value>(&line?) else { continue };
@@ -153,27 +94,29 @@ fn run(cli: Cli) -> Res<i32> {
             return Ok(code as i32);
         }
     }
-    Err("the kernel stopped before it had answered".into())
+    Err("the kernel stopped before it had answered. Start it again with `jarvis up NAME`; what it was doing is carried on".into())
 }
 
-/// The socket of the kernel that is to carry out a command: the one named
-/// with --on if it runs on this machine, else the one this process belongs
-/// to (`$JARVIS_KERNEL`), else the only one here.
-fn socket(on: &Option<String>) -> Res<PathBuf> {
+/// The socket of the kernel a command is given to: the one named, else the
+/// one this process belongs to or that $JARVIS_KERNEL names, else the only
+/// kernel running on this machine. A kernel that is named must be running
+/// here: nothing is ever handed to another one instead.
+fn socket(named: Option<&str>) -> Res<PathBuf> {
     let dir = kernel::run_dir();
     let of = |name: &str| dir.join(format!("{name}.sock"));
     let runs = |path: &Path| UnixStream::connect(path).is_ok();
-    if let Some(on) = on {
-        if runs(&of(on)) {
-            return Ok(of(on));
+    let from_env = std::env::var("JARVIS_KERNEL").ok().filter(|k| !k.is_empty());
+    if let Some(name) = named.map(str::to_string).or(from_env.clone()) {
+        if runs(&of(&name)) {
+            return Ok(of(&name));
         }
-        // Not on this machine: a kernel here passes the command on.
-    }
-    if let Some(mine) = std::env::var("JARVIS_KERNEL").ok().filter(|k| !k.is_empty()) {
-        if runs(&of(&mine)) {
-            return Ok(of(&mine));
-        }
-        return Err(format!("the kernel `{mine}` ($JARVIS_KERNEL) is not running on this machine").into());
+        let how = if named.is_some() { String::new() } else { " ($JARVIS_KERNEL)".to_string() };
+        return Err(format!(
+            "the kernel `{name}`{how} is not running on this machine: nothing answers at {}. Start it with `jarvis up {name}`; \
+             if it runs with another $JARVIS_RUN, set the same here",
+            of(&name).display()
+        )
+        .into());
     }
     let mut here: Vec<String> = std::fs::read_dir(&dir)
         .map(|entries| entries.flatten().filter_map(|e| e.file_name().into_string().ok()).filter_map(|n| n.strip_suffix(".sock").map(str::to_string)).collect())
@@ -181,17 +124,17 @@ fn socket(on: &Option<String>) -> Res<PathBuf> {
     here.retain(|name| runs(&of(name)));
     here.sort();
     match here.as_slice() {
-        [] => Err("no kernel is running on this machine. Start one with `jarvis up NAME` (see `jarvis help up`)".into()),
+        [] => Err(format!("no kernel is running on this machine (none answers in {}). Start one with `jarvis up NAME` (see `jarvis help up`)", dir.display()).into()),
         [only] => Ok(of(only)),
-        many => Err(format!("several kernels run on this machine ({}). Say which with --on NAME, or set $JARVIS_KERNEL", many.join(", ")).into()),
+        many => Err(format!("several kernels run on this machine ({}). Say which one you are on: set $JARVIS_KERNEL to its name", many.join(", ")).into()),
     }
 }
 
-/// `jarvis link --stdio`: be the far end of a link made through a command.
-/// What arrives on standard input goes to the kernel here, and what the
-/// kernel says goes to standard output, until either side ends.
-fn bridge(on: &Option<String>) -> Res<i32> {
-    let mut stream = UnixStream::connect(socket(on)?)?;
+/// `jarvis link --stdio [NAME]`: be the far end of a link made through a
+/// command. What arrives on standard input goes to the kernel here, and what
+/// the kernel says goes to standard output, until either side ends.
+fn bridge(named: Option<&str>) -> Res<i32> {
+    let mut stream = UnixStream::connect(socket(named)?)?;
     stream.write_all(b"{\"link\":true}\n")?;
     let mut to_kernel = stream.try_clone()?;
     std::thread::spawn(move || {
