@@ -54,8 +54,9 @@ pub fn overview() -> String {
          \n\
          Where a command looks. `ps`, `messages`, `log` and `watch` look at the kernel\n\
          you are on, unless you name processes or kernels, or say --all for every kernel\n\
-         that can be reached. Each kernel answers for itself; one that cannot be reached\n\
-         is named on standard error, and the command then exits with 2.\n\
+         known here. Each kernel answers for itself. One that does not answer or cannot\n\
+         be reached is named on standard error, and the command then exits with 2: what\n\
+         was shown is then not everything.\n\
          \n\
          Which kernel you are on. A process is on the kernel that hosts it. Otherwise it\n\
          is the only kernel running on this machine; if there are several, set\n\
@@ -198,7 +199,7 @@ pub enum Cmd {
     #[command(long_about = "Who exists and what each is doing; or everything about one process.\n\n\
         \x20 jarvis ps                    the processes on this kernel\n\
         \x20 jarvis ps @cannon-a @node2   those on these kernels\n\
-        \x20 jarvis ps --all              those on every kernel that can be reached\n\
+        \x20 jarvis ps --all              those on every kernel known here\n\
         \x20 jarvis ps a@node2 b@node3    these processes only\n\
         \x20 jarvis ps lammps@cannon-a    one process: everything about it\n\n\
         The list has one line per process, with its state, who made it, and how it \
@@ -308,7 +309,7 @@ pub enum Cmd {
         \x20 jarvis messages lammps@cannon-a    those to and from that process (asked of\n\
         \x20                                    its kernel)\n\
         \x20 jarvis messages @cannon-a          every message that kernel sent or received\n\
-        \x20 jarvis messages --all              those of every kernel that can be reached\n\n\
+        \x20 jarvis messages --all              those of every kernel known here\n\n\
         Oldest first, ending with the newest. Each shows its name (the kernel it was \
         sent from, and its number there), the time, who sent it to whom, and how far \
         it has got if it is not dealt with yet:\n\
@@ -356,7 +357,7 @@ pub enum Cmd {
         \x20 jarvis log lammps@cannon-a     what that process did, and the messages sent\n\
         \x20                                to it (asked of its kernel)\n\
         \x20 jarvis log @cannon-a           what happened on that kernel\n\
-        \x20 jarvis log --all               on every kernel that can be reached, by time\n\n\
+        \x20 jarvis log --all               on every kernel known here, by time\n\n\
         --json prints a list of objects: `id` (the record's place in its kernel's \
         order), `kernel`, `n` (its number there; empty for a step), `at`, `proc` (who \
         it is about), `kind` and `data`.")]
@@ -507,7 +508,7 @@ pub struct Ps {
     #[arg(value_name = "WHAT")]
     pub what: Vec<String>,
 
-    /// Every kernel that can be reached
+    /// Every kernel known here; one that cannot be reached is named
     #[arg(long, conflicts_with = "what")]
     pub all: bool,
 
@@ -554,7 +555,7 @@ pub struct Messages {
     #[arg(value_name = "WHAT")]
     pub what: Option<String>,
 
-    /// Every kernel that can be reached
+    /// Every kernel known here; one that cannot be reached is named
     #[arg(long, conflicts_with = "what")]
     pub all: bool,
 
@@ -596,7 +597,7 @@ pub struct Watch {
     #[arg(value_name = "WHAT")]
     pub what: Vec<String>,
 
-    /// Every kernel that can be reached, now and later
+    /// Every kernel known here, and those that come into reach later
     #[arg(long, conflicts_with = "what")]
     pub all: bool,
 
@@ -624,7 +625,7 @@ pub struct Log {
     #[arg(value_name = "WHAT")]
     pub what: Option<String>,
 
-    /// Every kernel that can be reached
+    /// Every kernel known here; one that cannot be reached is named
     #[arg(long, conflicts_with = "what")]
     pub all: bool,
 

@@ -389,7 +389,8 @@ impl Kernel {
             repo.root.display(),
             match fetched {
                 Ok(()) => String::new(),
-                Err(e) => format!(" ({e})"),
+                // Git's own words, without the command that was run.
+                Err(e) => format!(" ({})", e.to_string().rsplit("failed: ").next().unwrap_or("").trim()),
             }
         )
         .into())

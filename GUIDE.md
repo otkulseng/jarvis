@@ -87,7 +87,7 @@ You can ask any kernel, or all of them, from where you are:
 
 - `jarvis ps`, `jarvis messages`, `jarvis log` look at your own kernel.
   Name processes (`lammps@cannon-a`) or kernels (`@cannon-a`) to look
-  elsewhere, or say `--all` for every kernel that can be reached.
+  elsewhere, or say `--all` for every kernel known to yours.
 - A kernel that does not answer is named on standard error and the command
   exits with 2. What you were shown is then not everything.
 - `jarvis watch` gives the same as a stream of changes, for code.

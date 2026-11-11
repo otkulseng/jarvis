@@ -88,7 +88,8 @@ for round in 1 2 3; do
     for i in $(seq 0 $((count - 1))); do
         to=$(((i * 7 + 3 + round) % count))
         [ "$to" = "$i" ] && continue
-        as "w@k$i" send "w@k$to" "question $round from $i" > /dev/null 2>&1 < /dev/null
+        # Its own kernel may be the one that is down just now: then again.
+        until_ok 30 as "w@k$i" send "w@k$to" "question $round from $i"
         sent=$((sent + 1))
     done
 done
@@ -100,11 +101,13 @@ on k0 log --all --json -n 1000000 > "$work/log.json"
 python3 - "$work/log.json" "$sent" <<'EOF'
 import collections, json, sys
 facts = json.load(open(sys.argv[1]))
-arrived = [f["data"]["id"] for f in facts if f["kind"] == "arrive" and f["data"]["body"].startswith("question ")]
-local = [f["data"]["id"] for f in facts if f["kind"] == "send" and f["data"]["body"].startswith("question ") and f["data"]["to"].split("@")[1] == f["kernel"]]
-twice = sum(1 for n in collections.Counter(arrived).values() if n > 1)
-print(f"questions sent: {sys.argv[2]}; arrived: {len(arrived) + len(local)}; arrived twice: {twice}")
-sys.exit(0 if len(arrived) + len(local) == int(sys.argv[2]) and twice == 0 else 1)
+# A question arrives where it is for: brought by a link, or sent on that kernel itself.
+there = [f["data"] for f in facts if f["data"].get("body", "").startswith("question ")
+         and (f["kind"] == "arrive" or (f["kind"] == "send" and f["data"]["to"].split("@")[1] == f["kernel"]))]
+twice = sum(1 for n in collections.Counter(d["id"] for d in there).values() if n > 1)
+questions = len({d["body"] for d in there})
+print(f"questions sent: {sys.argv[2]}; arrived: {questions}; messages that arrived twice: {twice}")
+sys.exit(0 if questions == int(sys.argv[2]) and twice == 0 else 1)
 EOF
 
 step="what a kernel costs when nothing is sent to it"

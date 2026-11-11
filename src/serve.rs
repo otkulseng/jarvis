@@ -140,6 +140,22 @@ impl Ctx {
         rx
     }
 
+    /// Every other kernel this one has heard of and that nobody here took to
+    /// be gone: those that can be reached now first, then the others. The
+    /// others are asked too, so that they are named as not answering
+    /// instead of being left out silently.
+    fn known(&self) -> Res<Vec<String>> {
+        let mut kernels = self.reachable();
+        let mut stmt = self.conn.prepare("SELECT name FROM kernels WHERE closed = 0 ORDER BY name")?;
+        for name in stmt.query_map([], |r| r.get::<_, String>(0))? {
+            let name = name?;
+            if name != self.me && !kernels.contains(&name) {
+                kernels.push(name);
+            }
+        }
+        Ok(kernels)
+    }
+
     /// The kernels that can be reached over links now.
     fn reachable(&self) -> Vec<String> {
         self.shared.net.lock().unwrap().reachable.iter().map(|r| r.name.clone()).collect()
@@ -432,7 +448,7 @@ type Scope = Vec<(String, Vec<String>)>;
 /// kernel, `@K` a kernel, `NAME@K` a process, `--all` every kernel in reach.
 fn scope(ctx: &Ctx, what: &[String], all: bool) -> Res<Scope> {
     if all {
-        return Ok(std::iter::once(ctx.me.clone()).chain(ctx.reachable()).map(|k| (k, Vec::new())).collect());
+        return Ok(std::iter::once(ctx.me.clone()).chain(ctx.known()?).map(|k| (k, Vec::new())).collect());
     }
     if what.is_empty() {
         return Ok(vec![(ctx.me.clone(), Vec::new())]);
@@ -1258,7 +1274,7 @@ fn follow(ctx: &Ctx, by: &str, scope: Scope, all: bool, mut after: HashMap<Strin
     let mut said_lost: BTreeSet<String> = BTreeSet::new();
     loop {
         if all {
-            for kernel in ctx.reachable() {
+            for kernel in ctx.known()? {
                 parts.entry(kernel).or_default();
             }
         }
