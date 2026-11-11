@@ -146,6 +146,14 @@ Starting an expert from nothing is the same: any process may create one.
   you. You are told at your next turn. Do not rebase your branch: others may
   have started from it.
 
+## Tags
+
+A process can be tagged with what it belongs to: `jarvis tag NAME project=moe`.
+Tags are free-form and mean only what you and the others agree they mean. They
+are how the human, and you, find and group processes: by project, by place,
+by anything. When you take on work for a project, or create a process for
+one, tag it.
+
 ## Working well
 
 - When something is not as you expected, stop and say so plainly to whoever is

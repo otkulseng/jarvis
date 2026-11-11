@@ -18,7 +18,7 @@ pub struct Cli {
 /// The commands in the order they are listed, under these headings.
 const GROUPS: &[(&str, &[&str])] = &[
     ("Starting", &["init", "up"]),
-    ("Processes", &["spawn", "ps", "stop", "start", "remove"]),
+    ("Processes", &["spawn", "ps", "tag", "stop", "start", "remove"]),
     ("Talking", &["send", "messages"]),
     ("Looking", &["show", "log", "watch"]),
 ];
@@ -160,6 +160,22 @@ pub enum Cmd {
     #[command(after_long_help = "Examples:\n  jarvis remove scratch\n  jarvis remove page0 page1\n  jarvis remove lammps-gpu --keep-branch")]
     Remove(Remove),
 
+    /// Say what a process belongs to: a project, a place, anything
+    #[command(long_about = "Say what a process belongs to: a project, a place, anything.\n\n\
+        A tag is a name with a value, such as `project=moe` or `place=cluster one`. \
+        A process has at most one value for each name. Tags are free-form: jarvis \
+        stores and reports them (`jarvis ps`, `jarvis watch`) and gives them no \
+        meaning. They are for people, processes and programs to find and group \
+        processes by; the page arranges its map by them.\n\n\
+        Anyone may tag any process. `NAME=` with nothing after it removes that tag. \
+        Without any tags given, the process's tags are printed.")]
+    #[command(after_long_help = "Examples:\n\
+        \x20 jarvis tag lammps1 project=moe\n\
+        \x20 jarvis tag lammps1 \"place=cluster one\" role=lead\n\
+        \x20 jarvis tag lammps1 role=            remove the tag `role`\n\
+        \x20 jarvis tag lammps1                  print its tags")]
+    Tag(Tag),
+
     /// Send a message to a process, or to the human
     #[command(long_about = "Send a message to a process, or to the human.\n\n\
         The message goes into the recipient's mailbox and starts a turn there as soon \
@@ -281,6 +297,20 @@ pub struct Spawn {
     /// Which agent harness runs it: the name of a file in `harness/`
     #[arg(long, value_name = "NAME", default_value = "claude")]
     pub harness: String,
+
+    /// A tag for it, such as `project=moe` (see `jarvis help tag`). Can be given several times
+    #[arg(long = "tag", value_name = "NAME=VALUE")]
+    pub tags: Vec<String>,
+}
+
+#[derive(Args)]
+pub struct Tag {
+    /// The process, by name
+    pub who: String,
+
+    /// Tags to set, as NAME=VALUE; NAME= removes one
+    #[arg(value_name = "NAME=VALUE")]
+    pub tags: Vec<String>,
 }
 
 #[derive(Args)]

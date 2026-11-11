@@ -60,6 +60,7 @@ In another terminal:
     jarvis messages      # what was said
     jarvis log -f        # what is happening
     jarvis watch         # the same as JSON lines, for programs: every change, once
+    jarvis tag polaris project=moe   # say what it belongs to; the page groups by tags
     jarvis stop polaris  # end its turn and service now; its mail waits
     jarvis start polaris # let it go on
     jarvis remove scratch # delete it for good: directory, branch, mail, history

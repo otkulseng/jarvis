@@ -110,7 +110,11 @@ pub fn open(path: &Path) -> Res<Connection> {
         conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS events_by_proc ON events (proc, kind, id);
              CREATE INDEX IF NOT EXISTS messages_by_sender ON messages (sender, recipient, id);
-             CREATE INDEX IF NOT EXISTS messages_by_recipient ON messages (recipient, sender, id);",
+             CREATE INDEX IF NOT EXISTS messages_by_recipient ON messages (recipient, sender, id);
+             -- What a process belongs to, in anyone's words: `project = moe`,
+             -- `place = cluster one`. The kernel gives tags no meaning.
+             CREATE TABLE IF NOT EXISTS tags (
+                 proc TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (proc, key));",
         )?;
         return Ok(conn);
     }

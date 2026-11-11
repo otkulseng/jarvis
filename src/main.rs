@@ -50,6 +50,7 @@ fn run(command: Cmd) -> Res<()> {
         Cmd::Stop(args) => set_status(args, "stopped"),
         Cmd::Start(args) => set_status(args, "alive"),
         Cmd::Remove(args) => remove(args),
+        Cmd::Tag(args) => tag(args),
         Cmd::Send(args) => send(args),
         Cmd::Messages(args) => messages(args),
         Cmd::Show(args) => show(args),
@@ -243,6 +244,7 @@ fn spawn(args: cli::Spawn) -> Res<()> {
         }
     }
     let blank = prompt.is_none() && start.is_none() && args.tree.is_none();
+    let tags: Vec<(String, String)> = args.tags.iter().map(|t| parse_tag(t)).collect::<Res<_>>()?;
 
     let dir = home.proc_dir(&id);
     fs::create_dir_all(home.dot().join("proc"))?;
@@ -274,6 +276,7 @@ fn spawn(args: cli::Spawn) -> Res<()> {
              VALUES (?1, ?2, ?3, ?4, ?5, 'alive', ?6, ?7)",
             params![id, name, here, branch, args.harness, parent, db::now_ms()],
         )?;
+        set_tags(&conn, &id, &tags)?;
         db::event(&conn, &id, "spawn", json!({"name": name, "parent": parent, "from": args.from, "tree": args.tree}))?;
         Ok(())
     };
@@ -370,7 +373,7 @@ fn describe(home: &Home, conn: &Connection, p: &Proc) -> Res<Value> {
         .optional()?
         .flatten();
     Ok(json!({
-        "id": p.id, "name": p.name, "state": state, "about": about(&dir), "from": from,
+        "id": p.id, "name": p.name, "state": state, "about": about(&dir), "from": from, "tags": tags_of(conn, &p.id)?,
         "home": p.home, "branch": p.branch, "directory": dir.display().to_string(), "harness": p.harness,
         "parent": p.parent, "created_at": p.created_at,
         "turns": turns, "cost_usd": cost, "mail_waiting": mail,
@@ -463,6 +466,9 @@ fn ps_one(home: &Home, conn: &Connection, p: &Proc, as_json: bool) -> Res<()> {
     });
     line("made by", format!("{}, {} ago", label(conn, &p.parent), ago(p.created_at)));
     line("harness", p.harness.clone());
+    if let Some(tags) = row["tags"].as_object().filter(|tags| !tags.is_empty()) {
+        line("tags", tags.iter().map(|(k, v)| format!("{k}={}", v.as_str().unwrap_or(""))).collect::<Vec<_>>().join(", "));
+    }
     line("branch", format!("{}{}", p.branch, head.map(|h| format!(" (at {h})")).unwrap_or_default()));
     line("directory", home.proc_dir(&p.id).display().to_string());
     line("service", match (row["has_run"].as_bool(), service_pid, &last_exit) {
@@ -510,6 +516,60 @@ fn set_status(args: cli::Who, status: &str) -> Res<()> {
     }
     if kernel_pid(&conn).is_none() {
         note("the kernel is not running here; this takes effect when `jarvis up` is started");
+    }
+    Ok(())
+}
+
+/// `NAME=VALUE` as a tag. An empty value means "remove this tag".
+fn parse_tag(text: &str) -> Res<(String, String)> {
+    let (key, value) = text.split_once('=').ok_or_else(|| format!("`{text}` is not a tag: write NAME=VALUE, such as project=moe"))?;
+    let key = key.trim();
+    let plain = |c: char| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.');
+    if key.is_empty() || !key.chars().all(plain) {
+        return Err(format!("`{key}` cannot be the name of a tag: use letters, digits, spaces, `-`, `_` and `.`").into());
+    }
+    Ok((key.to_string(), value.trim().to_string()))
+}
+
+fn set_tags(conn: &Connection, proc: &str, tags: &[(String, String)]) -> Res<()> {
+    for (key, value) in tags {
+        if value.is_empty() {
+            conn.execute("DELETE FROM tags WHERE proc = ?1 AND key = ?2", params![proc, key])?;
+        } else {
+            conn.execute(
+                "INSERT INTO tags (proc, key, value) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(proc, key) DO UPDATE SET value = excluded.value",
+                params![proc, key, value],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// The tags of a process, as a JSON object.
+fn tags_of(conn: &Connection, proc: &str) -> Res<Value> {
+    let mut stmt = conn.prepare_cached("SELECT key, value FROM tags WHERE proc = ?1 ORDER BY key")?;
+    let tags: serde_json::Map<String, Value> =
+        stmt.query_map([proc], |r| Ok((r.get::<_, String>(0)?, Value::String(r.get(1)?))))?.collect::<Result<_, _>>()?;
+    Ok(Value::Object(tags))
+}
+
+fn tag(args: cli::Tag) -> Res<()> {
+    let conn = Home::find()?.open()?;
+    let proc = find(&conn, &args.who)?;
+    let tags: Vec<(String, String)> = args.tags.iter().map(|t| parse_tag(t)).collect::<Res<_>>()?;
+    if !tags.is_empty() {
+        set_tags(&conn, &proc.id, &tags)?;
+        let set: serde_json::Map<String, Value> = tags.iter().map(|(k, v)| (k.clone(), Value::String(v.clone()))).collect();
+        db::event(&conn, &proc.id, "tag", json!({"by": me(), "set": set}))?;
+    }
+    match tags_of(&conn, &proc.id)?.as_object() {
+        Some(now) if !now.is_empty() => {
+            for (key, value) in now {
+                println!("{key}={}", value.as_str().unwrap_or(""));
+            }
+        }
+        _ => println!("{} has no tags", proc.short()),
     }
     Ok(())
 }
@@ -572,6 +632,7 @@ fn remove(args: cli::Remove) -> Res<()> {
         conn.execute_batch("BEGIN")?;
         let forget = || -> Res<()> {
             conn.execute("DELETE FROM children WHERE proc = ?1", [&proc.id])?;
+            conn.execute("DELETE FROM tags WHERE proc = ?1", [&proc.id])?;
             conn.execute("DELETE FROM messages WHERE sender = ?1 OR recipient = ?1", [&proc.id])?;
             conn.execute("DELETE FROM events WHERE proc = ?1 OR (kind = 'send' AND json_extract(data, '$.to') = ?1)", [&proc.id])?;
             conn.execute("DELETE FROM processes WHERE id = ?1", [&proc.id])?;
@@ -931,6 +992,12 @@ fn event_lines_before(conn: &Connection, after: i64, before: Option<i64>, who: O
             "turn_interrupted" => "turn interrupted; its mail waits".to_string(),
             "spawn" => format!("created by {}", label(conn, &text("parent"))),
             "stop" => format!("stopped by {}", label(conn, &text("by"))),
+            "tag" => {
+                let set = d["set"].as_object().map(|set| {
+                    set.iter().map(|(k, v)| format!("{k}={}", v.as_str().unwrap_or(""))).collect::<Vec<_>>().join(", ")
+                });
+                format!("tagged by {}: {}", label(conn, &text("by")), set.unwrap_or_default())
+            }
             "remove" => {
                 let cost = d["cost_usd"].as_f64().map(|c| format!(", had cost ${c:.3}")).unwrap_or_default();
                 format!("removed {} (was at {}{cost})", text("name"), text("commit"))
