@@ -7,13 +7,16 @@ processes work on their own branches and land finished work on the branch
 
 ## What the reader sees
 
-- **The map** (`#/`): every process is a node, coloured by the expert it was
-  started from and drawn by its state (idle, working, failing, stopped). A
-  node that is dragged stays where it was put, here and in every other tab;
-  double-click frees it.
-  A line joins two that have exchanged messages, thicker the more they have,
-  dashed and moving while a message on it is waiting. A new message travels
-  along its line. Clicking a node opens that process; clicking a line opens
+- **The map** (`#/`): every process is a small point, and it is meant to
+  look like something thinking. At rest everything is dim and quiet. A
+  message is a bright head with a tail running along its line; the line stays
+  lit behind it and cools over a few seconds; the process it reaches flares.
+  A process that is working glows and breathes. Failing is red, stopped is a
+  hollow ring, a small white dot means it wrote to the reader. Names appear
+  when zoomed in or pointed at. A point that is dragged stays where it was
+  put, here and in every other tab; double-click frees it.
+  A line joins two that have exchanged messages, and glows faintly while a
+  message on it is waiting. Clicking a node opens that process; clicking a line opens
   the messages between its two ends.
 - **A process** (`#/p/NAME`): its conversation with the reader, with each of
   its turns folded between the messages; its files and notes, with markdown
@@ -111,7 +114,7 @@ load, in ways that do not show with three processes:
   - `lib/api.ts`: the types, and the calls the reader's actions make.
   - `lib/map/engine.ts`: the map on a canvas: layout (d3-force), drawing,
     pointer. `lib/map/MapView.svelte` tells it what to draw and draws what
-    sits on top. `lib/colours.ts`: a colour per expert.
+    sits on top. Its colours are the `--map-…` variables in `app.css`.
   - `lib/ProcessView.svelte`, `lib/Notes.svelte`, `lib/Activity.svelte`:
     inside one process.
   - `lib/EdgeView.svelte`, `lib/Inbox.svelte`, `lib/Dock.svelte`: the other

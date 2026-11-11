@@ -10,16 +10,23 @@
   --text: #1d1d1b;
   --muted: #6c6e73;
   --faint: #a2a4a8;
-  --accent: #6a55e0;
-  --accent-soft: rgba(106, 85, 224, 0.1);
+  --accent: #b46a00;
+  --accent-soft: rgba(196, 122, 0, 0.12);
   --on-accent: #ffffff;
   --good: #1f8a4c;
   --warn: #a86f12;
   --bad: #c0392b;
   --bad-soft: rgba(192, 57, 43, 0.1);
   --shadow: 0 8px 28px rgba(20, 20, 30, 0.12);
-  --dot: rgba(0, 0, 0, 0.07);
-  --edge: #c9c9c3;
+  /* The map: lines and points at rest, and the colour of light when
+     something happens. `--map-light: adds` makes light add up where it
+     overlaps, which only looks right on a dark page. */
+  --map-rest: #6b5a3a;
+  --map-hot: #d98a00;
+  --map-node: #a8771f;
+  --map-centre: #fbfaf7;
+  --map-edge: #f1f0ec;
+  --map-light: paints;
 
   /* Older names, still used in places. */
   --panel: var(--raised);
@@ -30,7 +37,7 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0e0f11;
+    --bg: #0a0b0d;
     --surface: #15171a;
     --raised: #1c1f23;
     --line: #2a2d32;
@@ -38,16 +45,20 @@
     --text: #e7e7e4;
     --muted: #8d9096;
     --faint: #5c5f66;
-    --accent: #9d8cff;
-    --accent-soft: rgba(157, 140, 255, 0.14);
-    --on-accent: #15121f;
+    --accent: #ffb347;
+    --accent-soft: rgba(255, 179, 71, 0.13);
+    --on-accent: #1f1400;
     --good: #4cc38a;
     --warn: #e2b04a;
     --bad: #f0716a;
     --bad-soft: rgba(240, 113, 106, 0.12);
     --shadow: 0 10px 34px rgba(0, 0, 0, 0.5);
-    --dot: rgba(255, 255, 255, 0.055);
-    --edge: #3d4148;
+    --map-rest: #ffd9a0;
+    --map-hot: #ffb347;
+    --map-node: #ffd08a;
+    --map-centre: #11131a;
+    --map-edge: #07080a;
+    --map-light: adds;
   }
 }
 

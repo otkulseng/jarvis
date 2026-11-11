@@ -5,7 +5,6 @@
   // `engine.ts`.
   import { onMount } from 'svelte';
   import { fetchPositions, money, savePositions } from '../api';
-  import { colourOf } from '../colours';
   import { HUMAN, go, href, store, toProcess } from '../live/store.svelte';
   import { MapEngine, type EdgeSpec, type NodeSpec } from './engine';
 
@@ -29,14 +28,14 @@
   });
 
   const nodes = $derived<NodeSpec[]>([
-    { id: HUMAN, label: 'you', sub: '', colour: '', state: 'you', radius: 17, badge: 0 },
+    { id: HUMAN, label: 'you', sub: '', state: 'you', radius: 4.5, badge: 0 },
     ...store.processes.map((p) => ({
       id: p.id,
       label: p.id,
       sub: p.id === store.me ? 'this page' : '',
-      colour: colourOf(p.from),
       state: p.state,
-      radius: 13 + Math.min(11, Math.sqrt(traffic.get(p.id) ?? 0) * 2),
+      // Small, and a little larger the more it talks.
+      radius: 2.6 + Math.min(6.5, Math.sqrt(traffic.get(p.id) ?? 0) * 0.9),
       badge: store.unreadFrom(p.id),
     })),
   ]);
@@ -87,17 +86,13 @@
 
   // Hand the engine what to draw, whenever that changes (and only then).
   $effect(() => {
-    if (engine && store.loaded) engine.setGraph(nodes.map((n) => (n.id === HUMAN ? { ...n, colour: accentColour() } : n)), edges);
+    if (engine && store.loaded) engine.setGraph(nodes, edges);
   });
-
-  function accentColour(): string {
-    return canvas ? getComputedStyle(canvas).getPropertyValue('--accent').trim() : '#9d8cff';
-  }
 
   const working = $derived(store.processes.filter((p) => p.state === 'thinking').length);
   const failing = $derived(store.processes.filter((p) => p.state === 'failing').length);
   const hovered = $derived(hover && hover.id !== HUMAN ? store.byName.get(hover.id) : undefined);
-  const experts = $derived([...new Set(store.processes.map((p) => p.from).filter((f): f is string => !!f))]);
+  const hoveredUnread = $derived(hovered ? store.unreadFrom(hovered.id) : 0);
 </script>
 
 <div class="map" bind:this={box}>
@@ -129,7 +124,8 @@
   {/if}
 
   {#if hover && hovered}
-    <div class="card" style:left="{hover.x}px" style:top="{hover.y + (hovered.id === store.me ? 40 : 28)}px">
+    <div class="card" style:left="{hover.x}px" style:top="{hover.y + (hovered.id === store.me ? 46 : 32)}px">
+      <div class="name">{hovered.id}{#if hoveredUnread}<span class="unread">{hoveredUnread} unread</span>{/if}</div>
       <div class="about">{hovered.about || 'Has not described itself yet.'}</div>
       <div class="facts">
         {hovered.state === 'thinking' ? 'working' : hovered.state}
@@ -145,13 +141,11 @@
     <span><i class="key thinking"></i>working</span>
     <span><i class="key failing"></i>failing</span>
     <span><i class="key stopped"></i>stopped</span>
-    {#each experts as expert (expert)}
-      <span><i class="key expert" style:--colour={colourOf(expert)}></i>{expert}</span>
-    {/each}
+    <span><i class="key unread"></i>wrote to you</span>
   </div>
   <div class="hint">
     {#if viewMoved}<button class="btn quiet" onclick={() => (engine?.fit(), (viewMoved = false))}>Fit</button>{/if}
-    click to open · drag to move (a moved node stays; double-click frees it) · scroll to zoom
+    zoom in for names · click to open · a dragged node stays, double-click frees it
   </div>
 </div>
 
@@ -160,8 +154,7 @@
     position: relative;
     height: 100%;
     overflow: hidden;
-    background-image: radial-gradient(var(--dot) 1px, transparent 1px);
-    background-size: 22px 22px;
+    background: radial-gradient(ellipse at 50% 55%, var(--map-centre) 0%, var(--map-edge) 72%);
     user-select: none;
   }
   canvas {
@@ -223,6 +216,17 @@
     box-shadow: var(--shadow);
     pointer-events: none;
   }
+  .name {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 2px;
+    font-weight: 600;
+  }
+  .unread {
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--accent);
+  }
   .about {
     font-size: 13px;
   }
@@ -245,11 +249,19 @@
   .legend {
     left: 22px;
     flex-wrap: wrap;
-    max-width: 50%;
   }
   .hint {
     right: 18px;
     gap: 8px;
+  }
+  /* On a narrow map there is room for only one of the two. */
+  .map {
+    container-type: inline-size;
+  }
+  @container (max-width: 880px) {
+    .hint {
+      display: none;
+    }
   }
   .hint .btn {
     pointer-events: auto;
@@ -260,24 +272,28 @@
     gap: 6px;
   }
   .key {
-    width: 9px;
-    height: 9px;
-    border: 1.5px solid var(--muted);
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
+    background: var(--map-node);
+    opacity: 0.7;
   }
   .key.thinking {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 2.5px var(--accent-soft);
+    opacity: 1;
+    box-shadow: 0 0 7px 2px var(--map-hot);
   }
   .key.failing {
-    border-color: var(--bad);
+    background: var(--bad);
+    opacity: 1;
   }
   .key.stopped {
-    border-style: dashed;
-    border-color: var(--faint);
+    border: 1px solid var(--faint);
+    background: none;
   }
-  .key.expert {
-    border-color: var(--colour);
-    background: color-mix(in srgb, var(--colour) 35%, transparent);
+  .key.unread {
+    width: 5px;
+    height: 5px;
+    background: var(--text);
+    opacity: 1;
   }
 </style>

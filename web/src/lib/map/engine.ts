@@ -2,9 +2,17 @@
 // Svelte: it is given nodes and lines, draws them, and says what the reader
 // did (opened something, pointed at something, moved something).
 //
+// The look: at rest, small dim points on hairlines. Activity is light. A
+// message is a bright head with a tail running along its line; the line
+// stays lit behind it and cools over a few seconds; the node it reaches
+// flares. A node that is working glows and breathes. So brightness means
+// "recently", and the eye goes to where work is happening. Names appear
+// when the reader zooms in (or points at a node).
+//
 // One loop owns the map. Each frame it moves the layout one step (d3-force)
-// and draws. It runs only while something moves: the layout settling, a node
-// being dragged, a message travelling, a node that is working. Nothing here
+// and draws. While something moves (the layout settling, a node being
+// dragged, a message travelling, a node that is working) it draws every
+// frame; otherwise only a few times a second, for the shimmer of the points. Nothing here
 // may go through the page's reactive state: that is far too slow for work
 // done sixty times a second.
 
@@ -17,7 +25,6 @@ export interface NodeSpec {
   label: string;
   /** A second, smaller line under the label. */
   sub: string;
-  colour: string;
   state: NodeState;
   radius: number;
   /** A count shown on the node (unread messages); 0 for none. */
@@ -47,12 +54,40 @@ export interface Callbacks {
   moved(positions: Positions): void;
 }
 
-type Node = NodeSpec & { x: number; y: number; vx: number; vy: number; fx?: number | null; fy?: number | null; pinned: boolean };
-type Link = { source: Node; target: Node; spec: EdgeSpec };
-type Pulse = { from: Node; to: Node; born: number };
+type Node = NodeSpec & {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  fx?: number | null;
+  fy?: number | null;
+  pinned: boolean;
+  /** 1 when a message has just left or reached it, fading to 0. */
+  flash: number;
+};
+/** `bend`: how far the line curves, as a share of its length. `heat`: 1 when a message has just used it, cooling to 0. */
+type Link = { source: Node; target: Node; spec: EdgeSpec; bend: number; heat: number };
+type Pulse = { link: Link; forward: boolean; born: number };
 
-const TRAVEL = 1000;
+/** How long a message takes to cross a line, and how long light lingers afterwards (ms). */
+const TRAVEL = 1100;
+const LINE_COOLS = 6000;
+const NODE_COOLS = 1600;
 const TAU = Math.PI * 2;
+/** Names are hidden when zoomed out this far, and fully shown from here on. */
+const NAMES_FROM = 0.8;
+const NAMES_FULL = 1.15;
+
+const clamp = (x: number) => Math.max(0, Math.min(1, x));
+
+/** A point on a line's curve, `t` from 0 (source) to 1 (target). */
+function along(l: Link, t: number): { x: number; y: number } {
+  const [ax, ay, bx, by] = [l.source.x, l.source.y, l.target.x, l.target.y];
+  const cx = (ax + bx) / 2 - (by - ay) * l.bend;
+  const cy = (ay + by) / 2 + (bx - ax) * l.bend;
+  const u = 1 - t;
+  return { x: u * u * ax + 2 * u * t * cx + t * t * bx, y: u * u * ay + 2 * u * t * cy + t * t * by };
+}
 
 export class MapEngine {
   private ctx: CanvasRenderingContext2D;
@@ -71,7 +106,15 @@ export class MapEngine {
   private hoverNode: Node | null = null;
   private hoverLink: Link | null = null;
   private drag: { node: Node | null; x: number; y: number; far: boolean; view: { x: number; y: number } } | null = null;
-  private colours = { bg: '#000', text: '#fff', faint: '#888', edge: '#444', accent: '#99f', bad: '#f66', onAccent: '#000' };
+  private colours = { bg: '#000', text: '#fff', faint: '#888', rest: '#fd9', hot: '#fb4', node: '#fd8', bad: '#f66' };
+  /** On a dark page light adds up, as light does; on a light page it is painted. */
+  private additive = true;
+  /** A soft round glow in the hot colour, drawn once and stamped wherever something is lit. */
+  private glow: HTMLCanvasElement | null = null;
+  private badGlow: HTMLCanvasElement | null = null;
+  private lastFrame = 0;
+  private idleFrames = 0;
+  private early: [string, string, number][] = [];
   private font = 'system-ui, sans-serif';
   private listeners: [string, EventListener][] = [];
 
@@ -85,7 +128,7 @@ export class MapEngine {
       .force('link', forceLink<Node, Link>().distance(200).strength(0.22))
       .force('x', forceX<Node>(0).strength(0.04))
       .force('y', forceY<Node>(0).strength(0.04))
-      .force('collide', forceCollide<Node>().radius((n) => n.radius + 30))
+      .force('collide', forceCollide<Node>().radius((n) => n.radius + 34))
       .stop();
     this.theme();
     const on = (type: string, listener: (event: any) => void, options?: AddEventListenerOptions) => {
@@ -114,13 +157,41 @@ export class MapEngine {
       bg: get('--bg', '#0e0f11'),
       text: get('--text', '#e7e7e4'),
       faint: get('--faint', '#5c5f66'),
-      edge: get('--edge', '#3d4148'),
-      accent: get('--accent', '#9d8cff'),
+      rest: get('--map-rest', '#ffd9a0'),
+      hot: get('--map-hot', '#ffb347'),
+      node: get('--map-node', '#ffd08a'),
       bad: get('--bad', '#f0716a'),
-      onAccent: get('--on-accent', '#15121f'),
     };
+    this.additive = get('--map-light', 'adds') === 'adds';
+    this.glow = this.sprite(this.colours.hot);
+    this.badGlow = this.sprite(this.colours.bad);
     this.font = css.fontFamily || this.font;
     this.wake();
+  }
+
+  /** A round glow that fades to nothing at its edge. */
+  private sprite(colour: string): HTMLCanvasElement {
+    const size = 128;
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = size;
+    const ctx = canvas.getContext('2d')!;
+    // Falls off the way blurred light does: fast near the middle, then a long soft edge.
+    for (const [reach, strength] of [[1, 0.35], [0.62, 0.45], [0.3, 0.7]]) {
+      const fade = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, (size / 2) * reach);
+      fade.addColorStop(0, colour);
+      fade.addColorStop(1, 'transparent');
+      ctx.globalAlpha = strength;
+      ctx.fillStyle = fade;
+      ctx.fillRect(0, 0, size, size);
+    }
+    return canvas;
+  }
+
+  /** Stamp a glow of radius `r` at a point. */
+  private lit(x: number, y: number, r: number, strength: number, sprite = this.glow) {
+    if (!sprite || strength <= 0.01) return;
+    this.ctx.globalAlpha = Math.min(1, strength);
+    this.ctx.drawImage(sprite, x - r, y - r, r * 2, r * 2);
   }
 
   resize(width: number, height: number) {
@@ -149,7 +220,7 @@ export class MapEngine {
       const at = this.saved[spec.id];
       if (at) {
         const pinned = at[2] === 1;
-        return { ...spec, x: at[0], y: at[1], vx: 0, vy: 0, pinned, fx: pinned ? at[0] : null, fy: pinned ? at[1] : null };
+        return { ...spec, x: at[0], y: at[1], vx: 0, vy: 0, pinned, flash: 0, fx: pinned ? at[0] : null, fy: pinned ? at[1] : null };
       }
       unplaced += 1;
       // Next to someone it talks to, if they are placed already; else on a spiral.
@@ -157,16 +228,24 @@ export class MapEngine {
       const near = edge && this.byId.get(edge.a === spec.id ? edge.b : edge.a);
       const angle = i * 2.399963;
       const far = near ? 70 : 100 + 24 * Math.sqrt(i);
-      return { ...spec, x: (near?.x ?? 0) + far * Math.cos(angle), y: (near?.y ?? 0) + far * Math.sin(angle), vx: 0, vy: 0, pinned: false };
+      return { ...spec, x: (near?.x ?? 0) + far * Math.cos(angle), y: (near?.y ?? 0) + far * Math.sin(angle), vx: 0, vy: 0, pinned: false, flash: 0 };
     });
     this.byId = new Map(this.nodes.map((n) => [n.id, n]));
+    const before = new Map(this.links.map((l) => [l.spec.key, l]));
     this.links = edges.flatMap((spec) => {
       const [source, target] = [this.byId.get(spec.a), this.byId.get(spec.b)];
-      return source && target ? [{ source, target, spec }] : [];
+      if (!source || !target) return [];
+      // Each line curves a little, always the same way: no ruler lines.
+      let hash = 0;
+      for (const c of spec.key) hash = (hash * 31 + c.charCodeAt(0)) >>> 0;
+      // A line that was there before stays the same line: what travels on it carries on.
+      const old = before.get(spec.key);
+      if (old) return [Object.assign(old, { source, target, spec })];
+      return [{ source, target, spec, bend: ((hash % 11) - 5) / 50 || 0.04, heat: 0 }];
     });
     this.sim.nodes(this.nodes);
     (this.sim.force('link') as ReturnType<typeof forceLink<Node, Link>>).links(this.links);
-    this.pulses = this.pulses.filter((p) => this.byId.has(p.from.id) && this.byId.has(p.to.id));
+    this.pulses = this.pulses.filter((p) => this.links.includes(p.link));
     if (this.hoverNode && !this.byId.has(this.hoverNode.id)) this.point(null, null);
 
     if (!this.laidOut) {
@@ -181,16 +260,29 @@ export class MapEngine {
     } else if (changed) {
       this.sim.alpha(Math.max(this.sim.alpha(), 0.5));
     }
+    // Messages that came just before their line was known can travel now.
+    const waiting = this.early;
+    this.early = [];
+    for (const [from, to, since] of waiting) {
+      if (performance.now() - since < 2000) this.pulse(from, to);
+    }
     this.wake();
   }
 
   /** A message goes from one node to another. Many at once on one line show as one. */
   pulse(from: string, to: string) {
-    const [a, b] = [this.byId.get(from), this.byId.get(to)];
-    if (!a || !b) return;
+    const link = this.links.find((l) => (l.source.id === from && l.target.id === to) || (l.source.id === to && l.target.id === from));
+    if (!link) {
+      // The first message between two arrives a moment before their line does.
+      if (this.early.length < 50) this.early.push([from, to, performance.now()]);
+      return;
+    }
+    const forward = link.source.id === from;
     const now = performance.now();
-    if (this.pulses.some((p) => p.from === a && p.to === b && now - p.born < TRAVEL * 0.6)) return;
-    this.pulses.push({ from: a, to: b, born: now });
+    link.heat = 1;
+    (forward ? link.source : link.target).flash = Math.max((forward ? link.source : link.target).flash, 0.6);
+    if (this.pulses.some((p) => p.link === link && p.forward === forward && now - p.born < TRAVEL * 0.6)) return;
+    this.pulses.push({ link, forward, born: now });
     this.wake();
   }
 
@@ -222,12 +314,33 @@ export class MapEngine {
 
   private frame(now: number) {
     this.raf = 0;
+    const passed = Math.min(100, now - (this.lastFrame || now));
+    this.lastFrame = now;
     const settling = this.sim.alpha() > this.sim.alphaMin();
     if (settling) this.sim.tick();
-    this.pulses = this.pulses.filter((p) => now - p.born < TRAVEL);
-    this.draw(now);
-    const alive = this.nodes.some((n) => n.state === 'thinking') || this.links.some((l) => l.spec.waiting);
-    if (settling || this.pulses.length || alive || this.drag) this.wake();
+
+    // A message that has arrived makes its receiver flare; everything lit cools.
+    this.pulses = this.pulses.filter((p) => {
+      if (now - p.born < TRAVEL) return true;
+      (p.forward ? p.link.target : p.link.source).flash = 1;
+      p.link.heat = 1;
+      return false;
+    });
+    let warm = false;
+    for (const l of this.links) {
+      l.heat = Math.max(0, l.heat - passed / LINE_COOLS);
+      warm ||= l.heat > 0 || l.spec.waiting;
+    }
+    for (const n of this.nodes) {
+      n.flash = Math.max(0, n.flash - passed / NODE_COOLS);
+      warm ||= n.flash > 0 || n.state === 'thinking';
+    }
+
+    // With nothing happening, the map still shimmers, but is drawn far less often.
+    const active = settling || this.pulses.length > 0 || warm || this.drag !== null;
+    this.idleFrames = active ? 0 : this.idleFrames + 1;
+    if (active || this.idleFrames % 4 === 0) this.draw(now);
+    if (this.nodes.length) this.wake();
   }
 
   private draw(now: number) {
@@ -239,131 +352,175 @@ export class MapEngine {
     ctx.scale(view.k, view.k);
 
     // While something is pointed at, only it and what it talks to stay lit.
-    let lit: Set<Node> | null = null;
-    if (this.hoverLink) lit = new Set([this.hoverLink.source, this.hoverLink.target]);
+    let near: Set<Node> | null = null;
+    if (this.hoverLink) near = new Set([this.hoverLink.source, this.hoverLink.target]);
     else if (this.hoverNode) {
-      lit = new Set([this.hoverNode]);
+      near = new Set([this.hoverNode]);
       for (const l of this.links) {
-        if (l.source === this.hoverNode) lit.add(l.target);
-        if (l.target === this.hoverNode) lit.add(l.source);
+        if (l.source === this.hoverNode) near.add(l.target);
+        if (l.target === this.hoverNode) near.add(l.source);
       }
     }
-    const dim = 0.2;
+    const dim = 0.25;
+    const trace = (l: Link) => {
+      const [ax, ay, bx, by] = [l.source.x, l.source.y, l.target.x, l.target.y];
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      ctx.quadraticCurveTo((ax + bx) / 2 - (by - ay) * l.bend, (ay + by) / 2 + (bx - ax) * l.bend, bx, by);
+    };
+    /** How lit a line is: just used, or carrying a message that waits. */
+    const heatOf = (l: Link) => Math.max(l.heat, l.spec.waiting ? 0.3 + 0.12 * Math.sin(now / 500) : 0);
+    /** How lit a node is: just fired, or working (a slow breath). */
+    const heatOfNode = (n: Node) => Math.max(n.flash, n.state === 'thinking' ? 0.5 + 0.18 * Math.sin(now / 700) : 0);
 
+    // 1. Everything at rest: hairlines.
     ctx.lineCap = 'round';
+    ctx.strokeStyle = colours.rest;
+    ctx.lineWidth = 0.8;
     for (const l of this.links) {
       const hot = l === this.hoverLink || (this.hoverNode !== null && (l.source === this.hoverNode || l.target === this.hoverNode));
-      ctx.globalAlpha = lit && !(lit.has(l.source) && lit.has(l.target)) ? dim : 1;
-      ctx.strokeStyle = hot || l.spec.waiting ? colours.accent : colours.edge;
-      ctx.lineWidth = l.spec.width;
-      if (l.spec.waiting) {
-        ctx.setLineDash([5, 6]);
-        ctx.lineDashOffset = -(now / 80) % 11;
-      }
-      ctx.beginPath();
-      ctx.moveTo(l.source.x, l.source.y);
-      ctx.lineTo(l.target.x, l.target.y);
+      const faded = near && !(near.has(l.source) && near.has(l.target)) ? dim : 1;
+      ctx.globalAlpha = (hot ? 0.5 : 0.1 + Math.min(0.14, l.spec.width * 0.035)) * faded;
+      trace(l);
       ctx.stroke();
-      ctx.setLineDash([]);
-    }
-    ctx.globalAlpha = 1;
-
-    if (this.hoverLink) {
-      const l = this.hoverLink;
-      this.text(l.spec.label, (l.source.x + l.target.x) / 2, (l.source.y + l.target.y) / 2 - 9, 11, colours.text, 500);
     }
 
-    ctx.fillStyle = colours.accent;
-    ctx.shadowColor = colours.accent;
-    ctx.shadowBlur = 8;
+    // 2. Light: lines that were just used, messages on their way, nodes that fire or work.
+    if (this.additive) ctx.globalCompositeOperation = 'lighter';
+    ctx.strokeStyle = colours.hot;
+    for (const l of this.links) {
+      const heat = heatOf(l);
+      if (heat <= 0.01) continue;
+      trace(l);
+      for (const [width, strength] of [[16, 0.045], [10, 0.08], [5.5, 0.15], [2.6, 0.3], [1.1, 0.7]]) {
+        ctx.lineWidth = width;
+        ctx.globalAlpha = strength * heat;
+        ctx.stroke();
+      }
+    }
     for (const p of this.pulses) {
       const t = (now - p.born) / TRAVEL;
       if (t <= 0 || t >= 1) continue;
       const e = t * t * (3 - 2 * t);
-      ctx.beginPath();
-      ctx.arc(p.from.x + (p.to.x - p.from.x) * e, p.from.y + (p.to.y - p.from.y) * e, 4, 0, TAU);
-      ctx.fill();
+      // The tail, from faint to bright, then the head.
+      for (let k = 22; k >= 0; k--) {
+        const back = e - k * 0.012;
+        if (back < 0) continue;
+        const at = along(p.link, p.forward ? back : 1 - back);
+        const fade = 1 - k / 23;
+        ctx.globalAlpha = fade * fade;
+        ctx.fillStyle = k < 3 ? '#ffffff' : colours.hot;
+        ctx.beginPath();
+        ctx.arc(at.x, at.y, 0.6 + 2.1 * fade * fade, 0, TAU);
+        ctx.fill();
+      }
+      const head = along(p.link, p.forward ? e : 1 - e);
+      this.lit(head.x, head.y, 64, 0.6);
+      this.lit(head.x, head.y, 24, 1);
     }
-    ctx.shadowBlur = 0;
-
     for (const n of this.nodes) {
-      ctx.globalAlpha = lit && !lit.has(n) ? dim : 1;
-      const base = ctx.globalAlpha;
-      const colour = n.state === 'failing' ? colours.bad : n.state === 'stopped' ? colours.faint : n.colour;
+      if (n.state === 'stopped') continue;
+      const faded = near && !near.has(n) ? dim : 1;
+      const heat = heatOfNode(n);
+      if (n.state === 'failing') this.lit(n.x, n.y, n.radius * 4 + 22, 0.5 * faded, this.badGlow);
+      else if (heat > 0.01) {
+        this.lit(n.x, n.y, n.radius * 3 + 46 + 44 * heat, 0.85 * heat * faded);
+        this.lit(n.x, n.y, n.radius * 2 + 12 + 10 * heat, heat * faded);
+      }
+      // The ring that spreads from a node as it fires.
+      if (n.flash > 0.45) {
+        ctx.globalAlpha = n.flash * 0.6 * faded;
+        ctx.strokeStyle = colours.hot;
+        ctx.lineWidth = 0.8;
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, n.radius + 9 + 22 * (1 - n.flash), 0, TAU);
+        ctx.stroke();
+      }
+    }
+    ctx.globalCompositeOperation = 'source-over';
+
+    // 3. The points themselves, and their names.
+    const zoomNames = clamp((view.k - NAMES_FROM) / (NAMES_FULL - NAMES_FROM));
+    for (const n of this.nodes) {
+      const faded = near && !near.has(n) ? dim : 1;
+      const heat = heatOfNode(n);
       const hot = n === this.hoverNode;
-
-      if (n.state === 'thinking') {
-        const t = (now % 1600) / 1600;
-        ctx.globalAlpha = base * 0.8 * (1 - t);
-        ctx.strokeStyle = colour;
-        ctx.lineWidth = 2;
+      if (n.state === 'stopped') {
+        ctx.globalAlpha = faded;
+        ctx.strokeStyle = colours.faint;
+        ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.arc(n.x, n.y, n.radius * (1 + 0.9 * t), 0, TAU);
+        ctx.arc(n.x, n.y, n.radius, 0, TAU);
         ctx.stroke();
-        ctx.globalAlpha = base;
-      }
-
-      ctx.beginPath();
-      ctx.arc(n.x, n.y, n.radius, 0, TAU);
-      ctx.fillStyle = colours.bg;
-      ctx.fill();
-      if (n.state !== 'stopped') {
-        ctx.globalAlpha = base * (hot ? 0.4 : 0.22);
-        ctx.fillStyle = colour;
-        ctx.fill();
-        ctx.globalAlpha = base;
-      }
-      ctx.strokeStyle = colour;
-      ctx.lineWidth = hot ? 2.4 : 1.6;
-      if (n.state === 'stopped') ctx.setLineDash([3, 3.5]);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      if (n.state === 'you') {
-        ctx.fillStyle = colours.accent;
+      } else {
+        // At rest a point shimmers a little, each in its own time, like something alive.
+        const shimmer = 0.07 * Math.sin(now / 900 + n.x * 0.05 + n.y * 0.03);
+        ctx.globalAlpha = (n.state === 'you' || hot ? 1 : 0.58 + shimmer + 0.42 * heat) * faded;
+        ctx.fillStyle = n.state === 'failing' ? colours.bad : colours.node;
         ctx.beginPath();
-        ctx.arc(n.x, n.y, 6, 0, TAU);
+        ctx.arc(n.x, n.y, n.radius + (hot ? 1 : 0), 0, TAU);
         ctx.fill();
+        // A white heart: always for the reader, otherwise as bright as the node is lit.
+        const heart = n.state === 'you' ? 0.9 : heat;
+        if (heart > 0.01) {
+          ctx.globalAlpha = heart * faded;
+          ctx.fillStyle = '#ffffff';
+          ctx.beginPath();
+          ctx.arc(n.x, n.y, n.radius * 0.5, 0, TAU);
+          ctx.fill();
+        }
       }
-      if (n.state === 'failing') this.text('!', n.x, n.y + 4.5, 13, colours.bad, 700, false);
-      if (n.pinned) {
-        ctx.fillStyle = colour;
+      if (hot) {
+        ctx.globalAlpha = 0.7;
+        ctx.strokeStyle = colours.hot;
+        ctx.lineWidth = 0.8;
         ctx.beginPath();
-        ctx.arc(n.x, n.y - n.radius, 2.2, 0, TAU);
-        ctx.fill();
+        ctx.arc(n.x, n.y, n.radius + 5, 0, TAU);
+        ctx.stroke();
       }
-
-      this.text(n.label, n.x, n.y + n.radius + 16, 12, n.state === 'stopped' ? colours.faint : colours.text, 500);
-      if (n.sub) this.text(n.sub, n.x, n.y + n.radius + 29, 10, colours.faint, 400);
-
+      // Unread mail from it: a small bright dot beside it.
       if (n.badge) {
-        const [bx, by] = [n.x + n.radius * 0.72, n.y - n.radius * 0.72];
+        ctx.globalAlpha = faded;
+        ctx.fillStyle = colours.text;
         ctx.beginPath();
-        ctx.arc(bx, by, 8, 0, TAU);
-        ctx.fillStyle = colours.accent;
+        ctx.arc(n.x + n.radius + 3, n.y - n.radius - 2, 2.3, 0, TAU);
         ctx.fill();
-        ctx.strokeStyle = colours.bg;
-        ctx.lineWidth = 2;
-        ctx.stroke();
-        this.text(n.badge > 9 ? '9+' : String(n.badge), bx, by + 3.5, 10, colours.onAccent, 700, false);
+      }
+
+      // Names: when zoomed in, for what is pointed at and its neighbours, and always for the reader.
+      const named = Math.max(zoomNames, near?.has(n) ? 1 : 0, n.state === 'you' ? 1 : 0);
+      if (named > 0.02) {
+        ctx.globalAlpha = named * faded;
+        const bright = heat > 0.2 || hot || n.state === 'you';
+        // Text keeps its size on screen while the map is zoomed.
+        const size = 10.5 / Math.max(view.k, 0.8);
+        const below = n.radius + 6 + size;
+        this.text(n.label, n.x, n.y + below, size, n.state === 'stopped' ? colours.faint : bright ? colours.text : colours.rest, 450, bright ? 1 : 0.75);
+        if (n.sub) this.text(n.sub, n.x, n.y + below + size * 1.15, size * 0.86, colours.faint, 400, 1);
       }
     }
     ctx.globalAlpha = 1;
+
+    if (this.hoverLink) {
+      const at = along(this.hoverLink, 0.5);
+      this.text(this.hoverLink.spec.label, at.x, at.y - 9 / view.k, 11 / view.k, colours.text, 500, 1);
+    }
   }
 
   /** Centred text, with the background colour around it so that it reads over lines. */
-  private text(text: string, x: number, y: number, size: number, colour: string, weight: number, halo = true) {
+  private text(text: string, x: number, y: number, size: number, colour: string, weight: number, strength: number) {
     const { ctx } = this;
+    const alpha = ctx.globalAlpha;
     ctx.font = `${weight} ${size}px ${this.font}`;
     ctx.textAlign = 'center';
-    if (halo) {
-      ctx.lineJoin = 'round';
-      ctx.lineWidth = 4;
-      ctx.strokeStyle = this.colours.bg;
-      ctx.strokeText(text, x, y);
-    }
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = size * 0.35;
+    ctx.strokeStyle = this.colours.bg;
+    ctx.strokeText(text, x, y);
+    ctx.globalAlpha = alpha * strength;
     ctx.fillStyle = colour;
     ctx.fillText(text, x, y);
+    ctx.globalAlpha = alpha;
   }
 
   // ── the pointer ─────────────────────────────────────────────────────────
@@ -379,7 +536,8 @@ export class MapEngine {
   private nodeAt(p: { x: number; y: number }): Node | null {
     for (let i = this.nodes.length - 1; i >= 0; i--) {
       const n = this.nodes[i];
-      if (Math.hypot(n.x - p.x, n.y - p.y) <= n.radius + 4) return n;
+      // Small points are still easy to hit.
+      if (Math.hypot(n.x - p.x, n.y - p.y) <= Math.max(n.radius + 5, 11 / this.view.k)) return n;
     }
     return null;
   }
@@ -387,10 +545,15 @@ export class MapEngine {
   private linkAt(p: { x: number; y: number }): Link | null {
     const reach = 7 / this.view.k;
     for (const l of this.links) {
-      const [ax, ay, bx, by] = [l.source.x, l.source.y, l.target.x, l.target.y];
-      const length2 = (bx - ax) ** 2 + (by - ay) ** 2 || 1;
-      const t = Math.max(0, Math.min(1, ((p.x - ax) * (bx - ax) + (p.y - ay) * (by - ay)) / length2));
-      if (Math.hypot(ax + t * (bx - ax) - p.x, ay + t * (by - ay) - p.y) <= reach) return l;
+      // The curve, as a few straight pieces.
+      let from = along(l, 0);
+      for (let i = 1; i <= 10; i++) {
+        const to = along(l, i / 10);
+        const length2 = (to.x - from.x) ** 2 + (to.y - from.y) ** 2 || 1;
+        const t = clamp(((p.x - from.x) * (to.x - from.x) + (p.y - from.y) * (to.y - from.y)) / length2);
+        if (Math.hypot(from.x + t * (to.x - from.x) - p.x, from.y + t * (to.y - from.y) - p.y) <= reach) return l;
+        from = to;
+      }
     }
     return null;
   }

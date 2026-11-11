@@ -3,7 +3,6 @@
   // happened to it; and the three things that can be done to it.
   import { act, ago, money } from './api';
   import Activity from './Activity.svelte';
-  import { colourOf } from './colours';
   import Composer from './Composer.svelte';
   import Notes from './Notes.svelte';
   import StatePill from './StatePill.svelte';
@@ -65,7 +64,6 @@
       </a>
       <div class="who">
         <div class="line">
-          <span class="swatch" style:--colour={colourOf(proc.from)}></span>
           <h1>{name}</h1>
           <StatePill {proc} now={store.now} />
           {#if isMe}<span class="tag">this page</span>{/if}
@@ -156,13 +154,6 @@
     display: flex;
     align-items: center;
     gap: 10px;
-  }
-  .swatch {
-    width: 12px;
-    height: 12px;
-    border: 1.6px solid var(--colour);
-    border-radius: 50%;
-    background: color-mix(in srgb, var(--colour) 30%, transparent);
   }
   h1 {
     margin: 0;

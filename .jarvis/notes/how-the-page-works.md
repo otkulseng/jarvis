@@ -33,3 +33,11 @@ and the loop sleeps when nothing moves.
 - Drag a node on the map with many processes present. It must not lag.
 - Send a burst of messages (a loop of `jarvis send`) with the map open. The
   lines thicken a few times a second; the page stays smooth.
+
+## Why the map looks the way it does
+
+The human asked for the map to look like a mind at work: "synapses that
+fire". So rest is quiet (small dim points, hairlines, hidden names) and only
+activity is bright, and brightness fades with time. Keep that balance: a new
+thing to show should be dim unless it is happening now. The default colour is
+amber, set by the `--map-…` variables in `web/src/app.css`.
