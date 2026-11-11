@@ -540,7 +540,7 @@ pub struct Kernel {
 pub fn up(args: cli::Up, store: Option<String>) -> Res<()> {
     let name = args.name.clone();
     index::check_name(&name, "kernel")?;
-    if matches!(name.as_str(), "packs" | HUMAN | KERNEL) {
+    if matches!(name.as_str(), HUMAN | KERNEL) {
         return Err(format!("`{name}` is reserved; choose another name for the kernel").into());
     }
     let here = std::env::current_dir()?;

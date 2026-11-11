@@ -66,7 +66,6 @@ CREATE INDEX messages_by_at ON messages (at, id);
 CREATE INDEX messages_by_sn ON messages (sn, seq);
 CREATE INDEX messages_by_rn ON messages (rn, seq);
 -- Files of the store that were read already.
-CREATE TABLE sources (path TEXT PRIMARY KEY);
 -- What only the kernel that owns this database needs.
 CREATE TABLE children (pid INTEGER PRIMARY KEY, started TEXT NOT NULL, proc TEXT NOT NULL, kind TEXT NOT NULL);
 CREATE TABLE outbox (id TEXT PRIMARY KEY, dest TEXT NOT NULL, payload TEXT NOT NULL);

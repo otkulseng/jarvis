@@ -207,11 +207,13 @@ process may create one. The name of an expert has no `@` in it.
 ## The store
 
 Every kernel writes its records (messages, turns, everything in
-`jarvis log`) into the store, a directory of files that are written once and
-never changed. `jarvis help store` describes it, and the tools for it:
-compacting it into one database, merging in another store. The store is
-there to be used: query it, compact it, archive what is old. Tell the others
-before you delete or move anything they might be reading.
+`jarvis log`) into its own directory in the store, as files that are written
+once and never changed. Nothing in the store belongs to more than one kernel,
+and every kernel reads all of it. `jarvis help store` describes the files.
+`jarvis store compact` puts a kernel's records into one database file. It is
+safe to run at any time, by anyone, without asking: it goes by the files
+alone. The store is there to be used: query it, compact it, copy it. Tell the
+others before you delete or move anything by hand.
 
 ## Tags
 

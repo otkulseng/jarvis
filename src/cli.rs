@@ -343,27 +343,28 @@ pub enum Cmd {
 
     /// Look after the store, where the records are kept
     #[command(long_about = "Look after the store, where the records are kept.\n\n\
-        Every kernel writes what happens to it into the store, a directory, as small \
-        files that are never changed afterwards: `STORE/<kernel>/log/<first>-<last>.jsonl`, \
-        one record per line. A record is named by its kernel and number \
-        (`laptop:412`), and two copies of a record are always identical. So stores \
-        can be copied, put together and read in any order, and nothing in them needs \
-        a lock. A kernel reads the whole store, and that is how it knows what \
-        happened on other kernels, running or gone.\n\n\
-        These commands work on the store's files directly. None needs a kernel, and \
-        the kernels using the store need not be told: they read whatever is there.\n\n\
+        Every kernel has its own directory in the store, `STORE/<kernel>/`, and \
+        nothing in a store belongs to more than one kernel. A kernel numbers its \
+        records 1, 2, 3, ... and writes them there as files that are never changed \
+        afterwards and whose names say what they hold:\n\n\
+        \x20 log/000000000213-000000000240.jsonl   its records 213 to 240, one per line\n\
+        \x20 records-000000000212.db               its records 1 to 212, in one SQLite file\n\n\
+        A record is named by its kernel and number (`laptop:412`), and two copies of \
+        a record are always identical. So stores can be copied, put together and read \
+        in any order, by anyone, and nothing in them needs a lock. A kernel reads the \
+        whole store, and that is how it knows what happened on other kernels, running \
+        or gone.\n\n\
         \x20 jarvis store ship          have this kernel write what it has not written yet,\n\
         \x20                            now (it does so by itself every few seconds)\n\
-        \x20 jarvis store compact       put everything into one read-only SQLite file,\n\
-        \x20                            `STORE/packs/*.db`, and delete the files it replaces\n\
+        \x20 jarvis store compact       put this kernel's records into one `records-N.db`\n\
+        \x20                            and delete the files it covers\n\
         \x20 jarvis store merge OTHER   copy in what another store has and this one lacks\n\n\
-        The store is yours to look after: files may be deleted, moved to an archive, \
-        or read with any tool. What is deleted here is gone from this store only; a \
-        copy elsewhere that still has it brings it back when merged in. Tell the \
-        others before you do something they could trip over.")]
+        `compact` and `merge` work on the store's files directly. They need no kernel, \
+        and nobody has to be told or asked: anyone may run them at any time.")]
     #[command(after_long_help = "Examples:\n\
-        \x20 jarvis store compact\n\
-        \x20 jarvis store compact --without laptop:412     leave a record out for good\n\
+        \x20 jarvis store compact                          this kernel's records\n\
+        \x20 jarvis store compact node-b                   those of another kernel, such as one that is gone\n\
+        \x20 jarvis store compact desk node-a --store DIR  with no kernel running: name the store and whose\n\
         \x20 jarvis store merge /mnt/backup/jarvis-store\n\
         \x20 jarvis messages --store /mnt/backup/jarvis-store lammps    read a store with no kernel")]
     Store(StoreArgs),
@@ -627,19 +628,29 @@ pub enum StoreCmd {
     /// Have this kernel write its new records to the store now
     Ship,
 
-    /// Put everything in the store into one read-only SQLite file
-    #[command(long_about = "Put everything in the store into one read-only SQLite file.\n\n\
-        Reads every log file and every earlier pack, writes one new pack beside them, \
-        puts it in place under its final name in one step, and only then deletes the \
-        files it replaces. If it is interrupted, records are at worst in two places, \
-        which harms nothing. Kernels may keep running: what they write meanwhile is \
-        left alone, and they read the pack like any other file.\n\n\
-        The pack has two tables: `records (k, n, at, kind, proc, data)` and \
-        `kernels (name, identity, created_at)`. Any SQLite tool can read it.")]
+    /// Put one kernel's records into one read-only SQLite file
+    #[command(long_about = "Put one kernel's records into one read-only SQLite file.\n\n\
+        Without KERNEL: the records of the kernel this command is given to. Only that \
+        kernel's directory in the store is read and changed.\n\n\
+        What it does, from the names of the files alone:\n\n\
+        \x20 1. Find the highest `records-M.db` and the log files that carry on from\n\
+        \x20    it without a gap, up to record N.\n\
+        \x20 2. Write records 1 to N into a new file beside them.\n\
+        \x20 3. Name it `records-N.db`, unless a file of that name is there already:\n\
+        \x20    then someone else wrote the same records, and the new file is dropped.\n\
+        \x20 4. Delete every log file that ends at or below N and every `records-M.db`\n\
+        \x20    below N.\n\n\
+        A file is deleted only once a complete file that covers it is in place, so \
+        every record is in some file at every moment. That makes it safe to run at \
+        any time, by anyone, inside or outside a kernel, several at once, and while \
+        the kernel keeps writing: nobody needs to be told or asked. Afterwards the \
+        kernel has one `records-N.db`, plus the log files it has written since.\n\n\
+        The file has one table, `records (k, n, at, kind, proc, data)`. Any SQLite \
+        tool can read it.")]
     Compact {
-        /// Leave this record out (as KERNEL:NUMBER). It is then gone from this store. Can be given several times
-        #[arg(long, value_name = "RECORD")]
-        without: Vec<String>,
+        /// Whose records [default: this kernel's]. Several can be named
+        #[arg(value_name = "KERNEL")]
+        kernels: Vec<String>,
     },
 
     /// Copy in what another store has and this one lacks

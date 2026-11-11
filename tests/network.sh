@@ -6,7 +6,7 @@
 #   - while the kernel in the middle is killed again and again, every message
 #     still arrives, and arrives once;
 #   - what happened can be read from the store alone, before and after the
-#     store is compacted.
+#     store is compacted, also while all of that goes on.
 #
 # Run it from anywhere: sh tests/network.sh. It uses its own repository,
 # store and sockets under /tmp, and no agent (tests/harness/echo answers).
@@ -71,6 +71,11 @@ echo "three kernels, linked a - b - c"
 killer=$!
 for i in $(seq 1 40); do
     JARVIS_KERNEL=a JARVIS_ID=asker@a jarvis send answerer@c "question $i" > /dev/null 2>&1 < /dev/null
+    # Records are compacted meanwhile, by two at once, with nobody asked.
+    if [ $((i % 8)) = 0 ]; then
+        JARVIS_KERNEL=a jarvis store compact a b c > /dev/null 2>&1 &
+        JARVIS_KERNEL=c jarvis store compact a b c > /dev/null 2>&1 &
+    fi
     sleep 0.1
 done
 wait $killer
@@ -115,10 +120,11 @@ for k in a b c; do down $k TERM; done
 sleep 1.5
 store="$work/repo/.jarvis/store"
 before=$(jarvis messages --store "$store" --json -n 5000 | count "True")
-jarvis store compact --store "$store" > /dev/null
+jarvis store compact a b c --store "$store" > /dev/null
+[ "$(find "$store" -name '*.db' | wc -l | tr -d ' ')" = 3 ]
 [ "$(find "$store" -name '*.jsonl' | wc -l | tr -d ' ')" = 0 ]
 after=$(jarvis messages --store "$store" --json -n 5000 | count "True")
-echo "messages in the store: $before; after compacting it into one file: $after"
+echo "messages in the store: $before; after compacting each kernel's records: $after"
 [ "$before" = "$after" ] && [ "$before" -ge 80 ]
 
 passed=yes

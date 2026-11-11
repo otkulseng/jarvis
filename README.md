@@ -29,10 +29,12 @@ work. `thoughts.md` says why; this says how.
   become. All of this is plain git, described in `GUIDE.md`; kernels know
   nothing about experts.
 - **The store** holds all records: every message, turn, commit and failure,
-  as files that are written once and never changed
-  (`STORE/<kernel>/log/*.jsonl`). A record is named by its kernel and number
-  (`laptop:412`), so stores can be copied, merged and compacted freely. What
-  a kernel knows about other kernels, running or gone, it reads from there.
+  as files that are written once and never changed. Each kernel has its own
+  directory there (`STORE/<kernel>/`), and nothing in the store belongs to
+  more than one kernel. A record is named by its kernel and number
+  (`laptop:412`) and a file by the records it holds, so anyone can copy,
+  merge and compact a store at any time without asking. What a kernel knows
+  about other kernels, running or gone, it reads from there.
   `jarvis help store` has the details.
 - **`GUIDE.md`**: what every agent is told about being a jarvis process. It
   holds the ideas; how to use the command is in the command's own help, which
@@ -126,8 +128,8 @@ With neither, the agent handles every message.
   kernel's socket as it was typed; `cli.rs` defines the commands and their help.
 - `net.rs`: links. `git.rs`, `children.rs`: git, and the programs a kernel starts.
 
-`cargo test` checks what records mean and that stores merge and compact
-without loss. `sh tests/network.sh` starts three kernels on this machine,
+`cargo test` checks what records mean, and that stores merge and compact
+without loss, also when several compact the same kernel at once. `sh tests/network.sh` starts three kernels on this machine,
 kills the one in the middle while messages cross it, and checks that every
 message arrived once (no agent is run; it takes under a minute).
 

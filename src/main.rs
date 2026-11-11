@@ -80,7 +80,12 @@ fn run(cli: Cli) -> Res<i32> {
             });
             if let Some(dir) = named {
                 println!("{}", match &args.what {
-                    StoreCmd::Compact { without } => store::compact(&dir, without)?,
+                    StoreCmd::Compact { kernels } => {
+                        if kernels.is_empty() {
+                            return Err("with no kernel running here, say whose records to compact: `jarvis store compact KERNEL --store DIR`".into());
+                        }
+                        kernels.iter().map(|k| store::compact(&dir, k)).collect::<Res<Vec<_>>>()?.join("\n")
+                    }
                     StoreCmd::Merge { other } => store::merge(&dir, &here.join(other))?,
                     StoreCmd::Ship => unreachable!(),
                 });

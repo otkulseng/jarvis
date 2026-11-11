@@ -302,8 +302,12 @@ fn run(ctx: &Ctx, request: &Value, out: &mut dyn Out) -> Res<i32> {
             let dir = || -> Res<&Path> { Ok(ctx.cfg.as_ref().ok_or("no kernel, and so no store, here")?.store_dir.as_path()) };
             match args.what {
                 StoreCmd::Ship => print(out, &ctx.mutate(Mutation::Ship)?),
-                StoreCmd::Compact { without } => {
-                    out.line(&store::compact(dir()?, &without)?);
+                StoreCmd::Compact { kernels } => {
+                    // With no kernel named: the records of this one.
+                    let kernels = if kernels.is_empty() { vec![ctx.me.clone()] } else { kernels };
+                    for kernel in &kernels {
+                        out.line(&store::compact(dir()?, kernel)?);
+                    }
                 }
                 StoreCmd::Merge { other } => {
                     let other = Path::new(request["cwd"].as_str().unwrap_or("/")).join(other);
