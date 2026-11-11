@@ -23,7 +23,9 @@ pub async fn run(args: &[&str], input: Option<&str>, as_human: bool) -> Result<S
     }
     drop(stdin);
     let out = child.wait_with_output().await.map_err(|e| e.to_string())?;
-    if !out.status.success() {
+    // 2: jarvis did part of it (a kernel did not answer, or a request to
+    // another kernel is not carried out yet). What it printed still counts.
+    if !out.status.success() && out.status.code() != Some(2) {
         return Err(String::from_utf8_lossy(&out.stderr).trim().trim_start_matches("jarvis: ").to_string());
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
@@ -38,16 +40,17 @@ pub async fn list(args: &[&str]) -> Result<Vec<Value>, String> {
     }
 }
 
-/// Follow `jarvis watch` for as long as this program runs, handing each line
-/// to `lines`. If the command ends (jarvis was reinstalled, say) it is
-/// started again from the last fact seen, so nothing is missed.
+/// Follow every kernel that can be reached (`jarvis watch --all`) for as
+/// long as this program runs, handing each line to `lines`. If the command
+/// ends (jarvis was reinstalled, say) it is started again from the last fact
+/// seen of each kernel, so nothing is missed.
 pub async fn watch(lines: mpsc::Sender<Value>) {
-    let mut cursor: Option<i64> = None;
+    let mut cursors: std::collections::BTreeMap<String, i64> = Default::default();
     loop {
-        let after = cursor.map(|c| c.to_string());
-        let mut args = vec!["watch", "--steps"];
-        if let Some(after) = &after {
-            args.extend(["--after", after]);
+        let after: Vec<String> = cursors.iter().map(|(kernel, n)| format!("{kernel}:{n}")).collect();
+        let mut args = vec!["watch", "--all", "--steps"];
+        for cursor in &after {
+            args.extend(["--after", cursor]);
         }
         let child = Command::new("jarvis").args(&args).stdout(Stdio::piped()).stderr(Stdio::inherit()).kill_on_drop(true).spawn();
         match child {
@@ -55,8 +58,8 @@ pub async fn watch(lines: mpsc::Sender<Value>) {
                 let mut reader = BufReader::new(child.stdout.take().expect("stdout is piped")).lines();
                 while let Ok(Some(line)) = reader.next_line().await {
                     let Ok(value) = serde_json::from_str::<Value>(&line) else { continue };
-                    if let Some(id) = value["fact"]["id"].as_i64().or_else(|| value["cursor"].as_i64()) {
-                        cursor = Some(id);
+                    if let (Some(kernel), Some(id)) = (value["kernel"].as_str(), value["fact"]["id"].as_i64().or_else(|| value["cursor"].as_i64())) {
+                        cursors.insert(kernel.to_string(), id);
                     }
                     if lines.send(value).await.is_err() {
                         return;

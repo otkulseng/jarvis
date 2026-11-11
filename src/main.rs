@@ -75,8 +75,8 @@ async fn follow(hub: Arc<Hub>) {
     while let Some(change) = changes.recv().await {
         // `ready`: the feed has (again) said how things stand. Count from there.
         if change["kind"] == "ready" {
-            let pairs = jarvis::list(&["messages", "--pairs", "--json"]).await;
-            let waiting = jarvis::list(&["messages", "--waiting", "--json", "-n", "100000"]).await;
+            let pairs = jarvis::list(&["messages", "--all", "--pairs", "--json"]).await;
+            let waiting = jarvis::list(&["messages", "--all", "--waiting", "--json", "-n", "100000"]).await;
             match (pairs, waiting) {
                 (Ok(pairs), Ok(waiting)) => hub.load(&pairs, &waiting),
                 (Err(e), _) | (_, Err(e)) => eprintln!("could not read the messages: {e}"),
@@ -142,7 +142,9 @@ async fn send(Json(m): Json<Value>) -> Result<Json<Value>, Failure> {
         return Err(bad("need `to` and `text`"));
     };
     // The text goes in on standard input, so it can contain anything.
-    jarvis::run(&["send", "--as", "human", to, "-"], Some(text), false).await.map_err(fail)?;
+    // The human, at the kernel this page is on.
+    let human = format!("human@{}", me().split('@').nth(1).unwrap_or(""));
+    jarvis::run(&["send", "--as", &human, to, "-"], Some(text), false).await.map_err(fail)?;
     Ok(Json(json!({"ok": true})))
 }
 

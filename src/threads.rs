@@ -22,24 +22,53 @@ pub async fn messages(topic: &str, before: Option<&str>) -> Result<Vec<Value>, S
     Ok(fetch(topic, before).await?.iter().map(shown).collect())
 }
 
-/// `before` is a message's name in jarvis, such as `laptop:412`.
+/// The human's mail: `human@K` on every kernel that can be reached.
+async fn inbox(page: &str, before: Option<&str>) -> Result<Vec<Value>, String> {
+    let kernels = jarvis::list(&["kernels", "--json"]).await?;
+    let mut all = Vec::new();
+    for kernel in kernels.iter().filter(|k| k["reachable"] == true) {
+        let human = format!("{HUMAN}@{}", kernel["name"].as_str().unwrap_or(""));
+        let mut args: Vec<&str> = vec!["messages", &human, "--json", "-n", page];
+        if let Some(before) = before {
+            args.extend(["--before", before]);
+        }
+        // A kernel that does not answer now is left out: its mail shows when it does.
+        if let Ok(messages) = jarvis::list(&args).await {
+            all.extend(messages.into_iter().filter(|m| is(&shown(m), "to", HUMAN)));
+        }
+    }
+    all.sort_by_key(|m| m["at"].as_i64());
+    all.dedup_by(|a, b| a["id"] == b["id"]);
+    let keep = all.len().saturating_sub(PAGE);
+    Ok(all.split_off(keep))
+}
+
+/// `before` is a time, in milliseconds since 1970: the `at` of the oldest
+/// message already shown.
 async fn fetch(topic: &str, before: Option<&str>) -> Result<Vec<Value>, String> {
     let page = PAGE.to_string();
+    if topic == "inbox" {
+        return inbox(&page, before).await;
+    }
     let mut args: Vec<&str> = vec!["messages", "--json", "-n", &page];
     if let Some(before) = before {
         args.extend(["--before", before]);
     }
-    if topic == "inbox" {
-        // `human` alone is the human on every kernel.
-        args.push(HUMAN);
-        let all = jarvis::list(&args).await?;
-        Ok(all.into_iter().filter(|m| is(&shown(m), "to", HUMAN)).collect())
-    } else if let Some(name) = topic.strip_prefix("process:") {
+    if let Some(name) = topic.strip_prefix("process:") {
         args.push(name);
         jarvis::list(&args).await
     } else if let Some((a, b)) = topic.strip_prefix("edge:").and_then(|pair| pair.split_once('|')) {
-        args.extend([a, "--with", b]);
-        jarvis::list(&args).await
+        // The human is `human@K` on any kernel: ask the process's kernel for
+        // its messages, and keep those whose other end is the human.
+        let (process, other) = if a == HUMAN { (b, a) } else { (a, b) };
+        if other == HUMAN {
+            args.push(process);
+            let all = jarvis::list(&args).await?;
+            Ok(all.into_iter().filter(|m| { let m = shown(m); is(&m, "from", HUMAN) || is(&m, "to", HUMAN) }).collect())
+        } else {
+            args.extend([process, "--with", other]);
+            jarvis::list(&args).await
+        }
     } else {
         Err(format!("`{topic}` is not something that has messages"))
     }

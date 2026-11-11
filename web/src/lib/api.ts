@@ -1,15 +1,15 @@
 // The page's view of jarvis. Everything comes from the server in this
 // directory's parent (`src/main.rs`), which gets it from the `jarvis` command.
 
-export type State = 'idle' | 'thinking' | 'failing' | 'stopped';
+/** `unreachable`: its kernel cannot be reached now, so how it stands is not known. */
+export type State = 'idle' | 'thinking' | 'failing' | 'stopped' | 'unreachable';
 
 export interface Proc {
   /** Its address, `name@kernel`: what it is known by everywhere on the page. */
   id: string;
   name: string;
-  /** The kernel that hosts it, and whether that is the kernel this page is on. */
+  /** The kernel that hosts it. */
   kernel: string;
-  here: boolean;
   /** `failing`: its last turn failed, and its mail waits for the next try. */
   state: State;
   /** How the process describes itself: the first line of its `.jarvis/ABOUT.md`. */
@@ -48,7 +48,7 @@ export interface Message {
    * on its way through other kernels. `pending`: arrived, waiting. `taken`:
    * being worked on. The rest are over with.
    */
-  status: 'sent' | 'forwarded' | 'pending' | 'taken' | 'handled' | 'dropped' | 'undeliverable';
+  status: 'sent' | 'forwarded' | 'pending' | 'taken' | 'handled' | 'dropped' | 'undeliverable' | 'failed';
   /** How many times it has been given to the recipient. */
   attempts: number;
 }
@@ -95,7 +95,7 @@ async function answer<T>(response: Response): Promise<T> {
 const post = (path: string, body: unknown) =>
   fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
-/** The messages of a topic before message `before`. */
+/** The messages of a topic sent before the moment `before` (a message's `at`). */
 export async function fetchOlder(topic: string, before: string): Promise<{ messages: Message[]; more: boolean }> {
   return answer(await fetch(`/api/older?topic=${encodeURIComponent(topic)}&before=${encodeURIComponent(before)}`));
 }

@@ -76,7 +76,8 @@
         id: p.id,
         label: store.label(p.id),
         sub: p.id === store.me ? 'this page' : '',
-        state: p.state,
+        // One whose kernel cannot be reached is drawn as one that is stopped.
+        state: p.state === 'unreachable' ? 'stopped' : p.state,
         // Small, and a little larger the more it talks.
         radius: 2.6 + Math.min(6.5, Math.sqrt(traffic.get(p.id) ?? 0) * 0.9),
         badge: store.unreadFrom(p.id),

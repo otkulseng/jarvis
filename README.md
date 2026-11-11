@@ -72,7 +72,7 @@ and each kind of change is dealt with in one small place.
                                       per topic)    once per frame)         kind of frame)
 
 - **The server is the one place that understands jarvis.** It follows
-  `jarvis watch`, keeps the current picture (who exists, how much each two
+  `jarvis watch --all` (every kernel that can be reached), keeps the current picture (who exists, how much each two
   have written to each other), and turns each change into *frames* for the
   browsers. `src/model.rs` lists the frames and the topics.
 - **A browser is told only about what it is showing.** It asks for topics

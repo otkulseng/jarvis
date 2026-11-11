@@ -9,7 +9,7 @@
 //! Browsers are told things in *frames*, JSON objects with a `type`:
 //!
 //!   process  {"process": {...}}        a process, as `jarvis ps --json` shows it
-//!   gone     {"id": ADDRESS}           a process was removed, or its kernel closed
+//!   gone     {"id": ADDRESS}           a process was removed
 //!   edge     {"edge": {a, b, count, talk, waiting, last_at}}
 //!                                      how much two have written to each other.
 //!                                      `talk` leaves out what jarvis wrote on
@@ -30,6 +30,12 @@
 //!   inbox            messages to the human
 //!   process:ID       the messages to and from a process, and the facts about it
 //!   edge:A|B         the messages between A and B (A before B in the alphabet)
+//!
+//! The page follows every kernel that can be reached (`jarvis watch --all`).
+//! A message between two kernels is reported by both; it is counted once,
+//! and of two reports of its status the one that is further along counts.
+//! The processes of a kernel that can no longer be reached stay on the map,
+//! in the state `unreachable`.
 //!
 //! Who is who: a process is known by its address, `name@kernel`, on whichever
 //! kernel it runs. The human is one, wherever they typed: jarvis says
@@ -64,7 +70,20 @@ pub fn shown(message: &Value) -> Value {
 
 /// Whether a message is still on its way or waiting, as opposed to over with.
 fn is_open(message: &Value) -> bool {
-    !matches!(text(message, "status"), "handled" | "dropped" | "undeliverable")
+    !matches!(text(message, "status"), "handled" | "dropped" | "undeliverable" | "failed")
+}
+
+/// How far along a status is. A message between two kernels is reported by
+/// both, and the kernel it came from learns late how far it got: word that
+/// is further along counts, and older word never undoes it.
+fn rank(message: &Value) -> u8 {
+    match text(message, "status") {
+        "sent" => 0,
+        "forwarded" => 1,
+        "pending" => 2,
+        "taken" => 3,
+        _ => 4,
+    }
 }
 
 /// Something to tell browsers.
@@ -84,7 +103,7 @@ pub struct Edge {
     pub by_jarvis: i64,
     pub waiting: i64,
     pub last_at: i64,
-    /// Messages up to this place in the feed were counted when the page started.
+    /// Messages sent up to this moment were counted when the page started.
     pub counted_to: i64,
 }
 
@@ -94,6 +113,8 @@ pub struct Model {
     pub edges: BTreeMap<(String, String), Edge>,
     /// The messages not dealt with yet, and the edge each is on.
     open: HashMap<String, (String, String)>,
+    /// How far each message seen since the page started has got.
+    ranks: HashMap<String, u8>,
 }
 
 pub fn pair(a: &str, b: &str) -> (String, String) {
@@ -126,11 +147,28 @@ impl Model {
             edge.count += n("count");
             edge.by_jarvis += n("by_jarvis");
             edge.last_at = edge.last_at.max(n("last_at"));
-            edge.counted_to = edge.counted_to.max(n("last_seq"));
+            edge.counted_to = edge.counted_to.max(n("last_at"));
         }
         for m in waiting {
             self.set_open(m);
         }
+    }
+
+    /// Take in what a kernel says of a message. Returns whether this is the
+    /// first that was heard of it, and whether it is news at all (older word
+    /// than what is known is not, and then nothing is to be told).
+    fn heard(&mut self, message: &Value) -> (bool, bool) {
+        let Some(id) = message["id"].as_str() else { return (false, false) };
+        let now = rank(message);
+        let known = self.ranks.get(id).copied();
+        if known.is_some_and(|known| known > now) {
+            return (false, false);
+        }
+        if known != Some(now) {
+            self.ranks.insert(id.to_string(), now);
+        }
+        self.set_open(message);
+        (known.is_none(), true)
     }
 
     /// Note whether a message is waiting. Safe to do twice.
@@ -230,30 +268,35 @@ impl Model {
                 let message = &change["message"];
                 // A message is brought by the fact that sent it and, when it
                 // crossed kernels, again by the fact that it arrived. It is
-                // news once: with the fact that brought it here first.
-                let brought = matches!(text(fact, "kind"), "send" | "arrive") && message.is_object() && message["seq"] == fact["id"];
-                if brought {
+                // news once: the first time it is seen.
+                if matches!(text(fact, "kind"), "send" | "arrive") && message.is_object() {
                     let (from, to) = (canon(text(message, "from")), canon(text(message, "to")));
                     let key = pair(from, to);
-                    let id = fact["id"].as_i64().unwrap_or(0);
-                    let edge = self.edges.entry(key.clone()).or_default();
-                    // A message counted when the page started is not counted again.
-                    if id > edge.counted_to {
-                        edge.count += 1;
-                        edge.last_at = edge.last_at.max(message["at"].as_i64().unwrap_or(0));
-                        if text(message, "body").starts_with("[jarvis]") {
-                            edge.by_jarvis += 1;
+                    let (first, news) = self.heard(message);
+                    if first {
+                        let at = message["at"].as_i64().unwrap_or(0);
+                        let edge = self.edges.entry(key.clone()).or_default();
+                        // A message counted when the page started is not counted again.
+                        if at > edge.counted_to {
+                            edge.count += 1;
+                            edge.last_at = edge.last_at.max(at);
+                            if text(message, "from").starts_with("kernel@") {
+                                edge.by_jarvis += 1;
+                            }
                         }
                     }
-                    self.set_open(message);
-                    out.push(Self::message_out(message));
-                    out.extend(self.edge_frame(&key));
-                    // For the map: something just went from one to the other.
-                    out.push(Out {
-                        topics: vec!["map".into()],
-                        key: Some(format!("pulse:{from}>{to}")),
-                        frame: json!({"type": "pulse", "from": from, "to": to}),
-                    });
+                    if news {
+                        out.push(Self::message_out(message));
+                        out.extend(self.edge_frame(&key));
+                    }
+                    if first {
+                        // For the map: something just went from one to the other.
+                        out.push(Out {
+                            topics: vec!["map".into()],
+                            key: Some(format!("pulse:{from}>{to}")),
+                            frame: json!({"type": "pulse", "from": from, "to": to}),
+                        });
+                    }
                 }
                 let topics = vec![process_topic(canon(text(fact, "proc")))];
                 let frame = json!({"type": "fact", "topics": topics, "fact": fact});
@@ -261,9 +304,19 @@ impl Model {
             }
             "message" => {
                 let message = &change["message"];
-                self.set_open(message);
-                out.push(Self::message_out(message));
-                out.extend(self.edge_frame(&pair(canon(text(message, "from")), canon(text(message, "to")))));
+                if self.heard(message).1 {
+                    out.push(Self::message_out(message));
+                    out.extend(self.edge_frame(&pair(canon(text(message, "from")), canon(text(message, "to")))));
+                }
+            }
+            // A kernel cannot be reached any more: its processes are shown as
+            // such until it can. (When it can, it says how each one stands.)
+            "lost" => {
+                let kernel = text(change, "kernel");
+                for process in self.processes.values_mut().filter(|p| text(p, "kernel") == kernel) {
+                    process["state"] = json!("unreachable");
+                    out.push(Self::process_frame(process));
+                }
             }
             // `ready`, `restart` and kinds this page does not know yet.
             _ => {}
@@ -288,7 +341,7 @@ mod tests {
     fn send(n: i64, from: &str, to: &str, status: &str, body: &str) -> Value {
         json!({"kind": "fact",
                "fact": {"id": n * 10, "proc": from, "kind": "send", "data": {"id": name(n), "to": to}},
-               "message": {"id": name(n), "seq": n * 10, "at": n, "from": from, "to": to, "body": body, "status": status}})
+               "message": {"id": name(n), "seq": n * 10, "at": n, "from": if body.starts_with("[jarvis]") { "kernel@k" } else { from }, "to": to, "body": body, "status": status}})
     }
 
     fn edge(model: &Model, a: &str, b: &str) -> Edge {
@@ -327,16 +380,17 @@ mod tests {
         let mut model = Model::default();
         model.apply(&process("a"));
         model.load(
-            &[json!({"a": "a", "b": "human@k", "count": 3, "by_jarvis": 1, "waiting": 1, "last_at": 50, "last_seq": 70}),
-              json!({"a": "a", "b": "human@other", "count": 2, "by_jarvis": 0, "waiting": 0, "last_at": 40, "last_seq": 60})],
+            &[json!({"a": "a", "b": "human@k", "count": 3, "by_jarvis": 1, "waiting": 1, "last_at": 50}),
+              json!({"a": "a", "b": "human@other", "count": 2, "by_jarvis": 0, "waiting": 0, "last_at": 40})],
             &[json!({"id": name(7), "from": "human@k", "to": "a", "status": "pending"})],
         );
+        // Sent before the page started (its time is not after the last one counted).
         model.apply(&send(7, HUMAN, "a", "pending", "seen before"));
         assert_eq!(edge(&model, "a", HUMAN).count, 5);
         assert_eq!(edge(&model, "a", HUMAN).waiting, 1);
-        model.apply(&send(8, HUMAN, "a", "pending", "[jarvis] new"));
+        model.apply(&send(60, HUMAN, "a", "pending", "new"));
         let after = edge(&model, "a", HUMAN);
-        assert_eq!((after.count, after.by_jarvis, after.waiting), (6, 2, 2));
+        assert_eq!((after.count, after.waiting), (6, 2));
     }
 
     #[test]
@@ -399,7 +453,23 @@ mod tests {
         assert_eq!(edge(&model, "a@one", "b@two").count, 1);
         assert_eq!(first.iter().filter(|out| out.frame["type"] == "pulse").count(), 1);
         assert_eq!(second.iter().filter(|out| out.frame["type"] == "pulse").count(), 0);
-        assert_eq!(second.len(), 1);
+        // The kernel it arrived on knows more: that is told.
+        assert_eq!(second.iter().filter(|out| out.frame["type"] == "message").count(), 1);
+        // Late word from the kernel it was sent from does not undo it.
+        let late = json!({"kind": "message", "message": message});
+        assert!(model.apply(&late).is_empty());
+        assert_eq!(edge(&model, "a@one", "b@two").waiting, 1);
+    }
+
+    #[test]
+    fn the_processes_of_a_kernel_that_is_lost_are_shown_as_unreachable() {
+        let mut model = Model::default();
+        model.apply(&json!({"kind": "process", "process": {"id": "a@one", "kernel": "one", "state": "idle"}}));
+        model.apply(&json!({"kind": "process", "process": {"id": "b@two", "kernel": "two", "state": "idle"}}));
+        let out = model.apply(&json!({"kind": "lost", "kernel": "two", "why": "it cannot be reached"}));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].frame["process"]["id"], "b@two");
+        assert_eq!(out[0].frame["process"]["state"], "unreachable");
     }
 
     #[test]

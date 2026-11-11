@@ -119,9 +119,11 @@
             {:else if m.status === 'sent'}
               <span class="status">on its way</span>
             {:else if m.status === 'forwarded'}
-              <span class="status">passed on, not known to have arrived</span>
+              <span class="status">passed on</span>
             {:else if m.status === 'undeliverable'}
               <span class="status">could not be delivered</span>
+            {:else if m.status === 'failed'}
+              <span class="status">could not be carried out</span>
             {:else if m.status === 'dropped'}
               <span class="status">dropped: its recipient was removed</span>
             {:else if m.status === 'pending'}

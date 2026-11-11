@@ -358,7 +358,7 @@ class Store {
   async loadOlder(topic: string) {
     const first = this.thread(topic).messages[0];
     if (!first) return;
-    const { messages, more } = await fetchOlder(topic, first.id);
+    const { messages, more } = await fetchOlder(topic, String(first.at));
     const thread = this.work.threads.get(topic);
     if (!thread) return;
     for (const message of messages) thread.messages.put(message, MOST.messages + messages.length);

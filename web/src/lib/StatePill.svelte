@@ -51,7 +51,8 @@
   .failing .dot {
     background: var(--bad);
   }
-  .stopped .dot {
+  .stopped .dot,
+  .unreachable .dot {
     background: var(--faint);
   }
   @keyframes blink {
