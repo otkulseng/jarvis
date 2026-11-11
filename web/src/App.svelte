@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { fetchSnapshot, send, type Fact, type Message, type Proc } from './lib/api';
+  import { fetchSnapshot, isStep, send, type Fact, type Message, type Proc } from './lib/api';
   import Processes from './lib/Processes.svelte';
   import Conversation from './lib/Conversation.svelte';
   import Facts from './lib/Facts.svelte';
@@ -9,6 +9,10 @@
   let processes = $state<Proc[]>([]);
   let messages = $state<Message[]>([]);
   let facts = $state<Fact[]>([]);
+  /** What agents do inside their turns, kept apart from the facts: there are many more of them. */
+  let steps = $state<Fact[]>([]);
+  /** The newest fact or step seen, so that only newer ones are asked for. */
+  let lastEvent = 0;
   let online = $state(false);
   /** The process whose conversation is shown; '' shows everyone's messages. */
   let selected = $state<string | null>(null);
@@ -20,17 +24,25 @@
     selected ? messages.filter((m) => m.from === selected || m.to === selected) : messages,
   );
   const shownFacts = $derived(selected ? facts.filter((f) => f.proc === selected) : facts);
+  // Steps are shown only in the conversation with one process.
+  const shownSteps = $derived(selected ? steps.filter((s) => s.proc === selected) : []);
 
   onMount(() => {
     let stopped = false;
     (async () => {
       while (!stopped) {
         try {
-          const snapshot = await fetchSnapshot(messages.at(-1)?.id ?? 0, facts.at(-1)?.id ?? 0);
+          const snapshot = await fetchSnapshot(messages.at(-1)?.id ?? 0, lastEvent);
           me = snapshot.me;
           processes = snapshot.processes;
           if (snapshot.messages.length) messages = [...messages, ...snapshot.messages];
-          if (snapshot.events.length) facts = [...facts, ...snapshot.events].slice(-1000);
+          if (snapshot.events.length) {
+            lastEvent = snapshot.events[snapshot.events.length - 1].id;
+            const newSteps = snapshot.events.filter(isStep);
+            const newFacts = snapshot.events.filter((e) => !isStep(e));
+            if (newSteps.length) steps = [...steps, ...newSteps].slice(-3000);
+            if (newFacts.length) facts = [...facts, ...newFacts].slice(-1000);
+          }
           // Start in conversation with the process behind this page.
           if (selected === null) selected = me;
           online = true;
@@ -55,6 +67,7 @@
   <Processes {processes} {me} {label} bind:selected />
   <Conversation
     messages={shownMessages}
+    steps={shownSteps}
     to={selected ? selected : null}
     {label}
     onsend={(to, text) => send(to, text)}

@@ -2,7 +2,8 @@
 //! and answers two questions for it, both by running the `jarvis` command:
 //!
 //!   GET  /api/snapshot?messages_after=N&events_after=M
-//!        who exists, and the messages and facts newer than the given ids
+//!        who exists, and the messages and facts newer than the given ids.
+//!        The facts include every step agents take inside their turns.
 //!   POST /api/send  {"to": ..., "text": ...}
 //!        send a message as the human
 //!
@@ -53,7 +54,7 @@ async fn snapshot(Query(q): Query<HashMap<String, String>>) -> Result<Json<Value
     let after = |key: &str| q.get(key).and_then(|v| v.parse::<i64>().ok()).unwrap_or(0).to_string();
     let (messages_after, events_after) = (after("messages_after"), after("events_after"));
     let messages_args = ["messages", "--json", "--after", messages_after.as_str()];
-    let events_args = ["log", "--json", "--after", events_after.as_str()];
+    let events_args = ["log", "--json", "--steps", "--after", events_after.as_str()];
     let (processes, messages, events) = tokio::try_join!(
         jarvis_json(&["ps", "--json"]),
         jarvis_json(&messages_args),

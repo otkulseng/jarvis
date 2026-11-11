@@ -43,6 +43,17 @@ export interface Fact {
   data: Record<string, unknown>;
 }
 
+/** A fact of kind `step`: one thing an agent did inside a turn. */
+export interface StepData {
+  /** `text` (it said something), `thinking`, `tool` (it used one), `result` (what came back). */
+  step: string;
+  text: string;
+  /** For `result`: the tool reported an error. */
+  error?: boolean;
+}
+
+export const isStep = (fact: Fact) => fact.kind === 'step';
+
 export interface Snapshot {
   /** The id of the process serving this page. */
   me: string;
