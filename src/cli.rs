@@ -566,12 +566,13 @@ pub struct Messages {
     #[arg(long, value_name = "OTHER", requires = "what")]
     pub with: Option<String>,
 
-    /// Only messages sent after this one (a message's name, such as laptop:412)
-    #[arg(long, value_name = "MESSAGE")]
+    /// Only messages sent after this moment: a time in milliseconds since
+    /// 1970 (`at` in --json), or the name of a message this kernel has
+    #[arg(long, value_name = "WHEN")]
     pub after: Option<String>,
 
-    /// Only messages sent before this one (to read further back)
-    #[arg(long, value_name = "MESSAGE")]
+    /// Only messages sent before this moment (to read further back)
+    #[arg(long, value_name = "WHEN")]
     pub before: Option<String>,
 
     /// Instead of messages: for each two who have written to each other, how
@@ -626,6 +627,15 @@ pub struct Log {
     /// Every kernel that can be reached
     #[arg(long, conflicts_with = "what")]
     pub all: bool,
+
+    /// Only records after this place in the kernel's order (`id` in --json).
+    /// For one kernel or one process only
+    #[arg(long, value_name = "NUMBER", conflicts_with = "all")]
+    pub after: Option<i64>,
+
+    /// Only records before this place in the kernel's order
+    #[arg(long, value_name = "NUMBER", conflicts_with = "all")]
+    pub before: Option<i64>,
 
     /// How many, counted from the newest [default: 30, or 500 with --json]
     #[arg(short = 'n', value_name = "COUNT")]

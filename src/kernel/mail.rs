@@ -354,8 +354,11 @@ impl Kernel {
         let item: Value = payload.and_then(|p| serde_json::from_str(&p).ok()).unwrap_or(Value::Null);
         // That a message went on is worth writing down; word about one is not.
         if item["kind"] != "receipt" {
-            let from = item["from"].as_str().unwrap_or("").to_string();
-            self.note(&from, "forward", json!({"message": id, "next": next}));
+            // About its sender if that is a process here; else it is this
+            // kernel's own doing, passing on what came from elsewhere.
+            let from = item["from"].as_str().unwrap_or("");
+            let about = if kernel_of(from) == self.me { from.to_string() } else { self.addr(KERNEL) };
+            self.note(&about, "forward", json!({"message": id, "next": next}));
         }
     }
 

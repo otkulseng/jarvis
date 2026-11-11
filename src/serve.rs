@@ -861,18 +861,32 @@ fn rank(status: &str) -> u8 {
     }
 }
 
+/// A moment given as a time in milliseconds, or as the name of a message
+/// this kernel has: then the time that message was sent.
+fn moment(ctx: &Ctx, when: &Option<String>) -> Res<Option<i64>> {
+    let Some(when) = when else { return Ok(None) };
+    if let Ok(time) = when.parse::<i64>() {
+        return Ok(Some(time));
+    }
+    match ctx.conn.query_row("SELECT at FROM messages WHERE id = ?1", [when], |r| r.get(0)) {
+        Ok(time) => Ok(Some(time)),
+        Err(_) => Err(format!("the kernel `{}` has no message `{when}`. Give the moment as a time instead (`at` in --json), or ask the kernel that has the message", ctx.me).into()),
+    }
+}
+
 /// This kernel's messages, newest last: all, or those to or from `who`.
-fn message_rows(ctx: &Ctx, who: Option<&str>, args: &cli::Messages, count: i64) -> Res<Vec<Value>> {
+/// `after` and `before` are times.
+fn message_rows(ctx: &Ctx, who: Option<&str>, args: &cli::Messages, after: Option<i64>, before: Option<i64>, count: i64) -> Res<Vec<Value>> {
     let mut stmt = ctx.conn.prepare(&format!(
         "SELECT {MESSAGE_COLUMNS} FROM messages
-         WHERE (?1 IS NULL OR (at, id) > (SELECT at, id FROM messages WHERE id = ?1))
-           AND (?2 IS NULL OR (at, id) < (SELECT at, id FROM messages WHERE id = ?2))
+         WHERE (?1 IS NULL OR at > ?1)
+           AND (?2 IS NULL OR at < ?2)
            AND (?3 = 0 OR {OPEN})
            AND (?4 IS NULL OR sender = ?4 OR recipient = ?4)
            AND (?5 IS NULL OR sender = ?5 OR recipient = ?5)
          ORDER BY at DESC, id DESC LIMIT ?6"
     ))?;
-    let mut rows: Vec<Value> = stmt.query_map(params![args.after, args.before, args.waiting, who, args.with, count], |r| message_row(&ctx.me, r))?.collect::<Result<_, _>>()?;
+    let mut rows: Vec<Value> = stmt.query_map(params![after, before, args.waiting, who, args.with, count], |r| message_row(&ctx.me, r))?.collect::<Result<_, _>>()?;
     rows.reverse();
     Ok(rows)
 }
@@ -918,9 +932,11 @@ fn messages(ctx: &Ctx, by: &str, args: cli::Messages, out: &mut dyn Out) -> Res<
     let count = args.count.unwrap_or(if args.json { 500 } else { 20 });
     // The same question, as it is put to another kernel.
     let mut flags: Vec<String> = vec!["-n".into(), count.to_string()];
-    for (flag, value) in [("--with", &args.with), ("--after", &args.after), ("--before", &args.before)] {
+    // Other kernels are given the moments as times: they need not have the message named.
+    let (after, before) = (moment(ctx, &args.after)?, moment(ctx, &args.before)?);
+    for (flag, value) in [("--with", args.with.clone()), ("--after", after.map(|t| t.to_string())), ("--before", before.map(|t| t.to_string()))] {
         if let Some(value) = value {
-            flags.extend([flag.to_string(), value.clone()]);
+            flags.extend([flag.to_string(), value]);
         }
     }
     if args.waiting {
@@ -955,7 +971,7 @@ fn messages(ctx: &Ctx, by: &str, args: cli::Messages, out: &mut dyn Out) -> Res<
         }
         return Ok(report(out, &silent));
     }
-    let (rows, silent) = gather(ctx, by, &scope, "messages", &flags, |_| message_rows(ctx, who.as_deref(), &args, count))?;
+    let (rows, silent) = gather(ctx, by, &scope, "messages", &flags, |_| message_rows(ctx, who.as_deref(), &args, after, before, count))?;
     // A message between two kernels is known to both: the word of the one
     // where it got furthest counts.
     let mut newest: BTreeMap<(i64, String), Value> = BTreeMap::new();
@@ -1034,10 +1050,11 @@ const ABOUT_PROC: &str = "(?2 IS NULL OR proc = ?2 OR (kind IN ('send', 'arrive'
 /// are shown only when asked for.
 const STEPS: &str = "(?3 OR kind != 'step')";
 
-/// The newest `count` of this kernel's records (about `who`, if given), oldest first.
-fn fact_rows(ctx: &Ctx, who: Option<&str>, steps: bool, count: i64) -> Res<Vec<Value>> {
-    let mut stmt = ctx.conn.prepare(&format!("SELECT {FACT_COLUMNS} FROM records WHERE seq > ?1 AND {ABOUT_PROC} AND {STEPS} ORDER BY seq DESC LIMIT ?4"))?;
-    let mut rows: Vec<Value> = stmt.query_map(params![0, who, steps, count], fact_row)?.collect::<Result<_, _>>()?;
+/// The newest `count` of this kernel's records (about `who`, if given, and
+/// between two places in its order, if given), oldest first.
+fn fact_rows(ctx: &Ctx, who: Option<&str>, args: &cli::Log, count: i64) -> Res<Vec<Value>> {
+    let mut stmt = ctx.conn.prepare(&format!("SELECT {FACT_COLUMNS} FROM records WHERE seq > ?1 AND {ABOUT_PROC} AND {STEPS} AND (?5 IS NULL OR seq < ?5) ORDER BY seq DESC LIMIT ?4"))?;
+    let mut rows: Vec<Value> = stmt.query_map(params![args.after.unwrap_or(0), who, args.steps, count, args.before], fact_row)?.collect::<Result<_, _>>()?;
     rows.reverse();
     Ok(rows)
 }
@@ -1052,7 +1069,7 @@ fn fact_text(fact: &Value) -> String {
         "send" => format!("→ {}: {}", text("to"), clip(&text("body"), 140)),
         "arrive" if d["request"].is_object() => format!("is asked by {} (through {}): jarvis {}", text("from"), text("via"), clip(&text("body"), 120)),
         "arrive" => format!("← {} (through {}): {}", text("from"), text("via"), clip(&text("body"), 120)),
-        "forward" => format!("its message {} was passed on to {}", text("message"), text("next")),
+        "forward" => format!("the message {} was passed on to {}", text("message"), text("next")),
         "undeliverable" => format!("the message {} could not be delivered: {}", text("message"), text("why")),
         "receipt" => match (text("status").as_str(), d["result"].as_str()) {
             ("pending", _) => format!("its message {} arrived", text("message")),
@@ -1131,7 +1148,12 @@ fn log(ctx: &Ctx, by: &str, args: cli::Log, out: &mut dyn Out) -> Res<i32> {
     if args.steps {
         flags.push("--steps".into());
     }
-    let (mut rows, silent) = gather(ctx, by, &scope, "log", &flags, |_| fact_rows(ctx, who.as_deref(), args.steps, count))?;
+    for (flag, value) in [("--after", args.after), ("--before", args.before)] {
+        if let Some(value) = value {
+            flags.extend([flag.to_string(), value.to_string()]);
+        }
+    }
+    let (mut rows, silent) = gather(ctx, by, &scope, "log", &flags, |_| fact_rows(ctx, who.as_deref(), &args, count))?;
     rows.sort_by_key(|r| (r["at"].as_i64(), r["kernel"].as_str().map(str::to_string), r["id"].as_i64()));
     let rows = &rows[rows.len().saturating_sub(count.max(0) as usize)..];
     if args.json {

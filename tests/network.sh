@@ -47,7 +47,7 @@ as() { who=$1; shift; JARVIS_KERNEL=${who#*@} JARVIS_ID=$who jarvis "$@"; }   # 
 up() { jarvis up "$1" >> "$work/$1.log" 2>&1 & echo $! > "$work/$1.pid"; }
 down() { kill "-$2" "$(cat "$work/$1.pid")" 2>/dev/null || true; }
 finish() {
-    [ -n "${watcher:-}" ] && kill "$watcher" 2>/dev/null || true
+    [ -n "${watcher:-}" ] && { kill "$watcher" 2>/dev/null; wait "$watcher" 2>/dev/null; } || true
     for k in a b c; do down $k TERM; done
     sleep 1
     [ "${passed:-no}" = yes ] && rm -rf "$work" || echo "FAILED at: ${step:-the start}. What was left is in $work" >&2
