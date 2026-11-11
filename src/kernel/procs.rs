@@ -337,6 +337,8 @@ impl Kernel {
             Ok(None) => {}
             Err(e) => {
                 self.rec(addr, "commit_failed", json!({"error": e.to_string()}))?;
+                // Its work is in its directory but not in the repository: it should know.
+                self.tell(addr, &format!("[jarvis] What you changed in your last turn could not be committed, so it is in your directory only and not safe yet. Look at `git status` there and put it right; the next turn tries again.\n\nThe error:\n{e}"))?;
             }
         }
         // Its code changed during the turn, whether the kernel committed it

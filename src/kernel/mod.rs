@@ -725,7 +725,6 @@ impl Kernel {
             return;
         }
         live.trouble = Some(error.to_string());
-        eprintln!("jarvis: problem with {name}: {error}");
         let addr = self.addr(name);
         self.note(&addr, "kernel_error", json!({"error": error}));
     }

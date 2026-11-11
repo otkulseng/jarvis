@@ -11,10 +11,9 @@ examples. Read that before using a command for the first time.
 
 jarvis gives you a few simple tools that do exactly what they say. It does
 not decide things for you, and it does not settle the hard cases: two of you
-wanting to change the same thing, something that must be deleted everywhere,
-a kernel that may or may not be dead. **Those are settled by talking.** Say
-what you are about to do to whoever it touches, wait if they need you to,
-then do it.
+wanting to change the same thing, whether a kernel that cannot be reached is
+gone for good. **Those are settled by talking.** Say what you are about to do
+to whoever it touches, wait if they need you to, then do it.
 
 ## What you are
 
@@ -22,21 +21,22 @@ then do it.
   you receive starts a turn. Your session is continued from turn to turn, but
   it can be lost, so what matters must be written down.
 - **Hosted by a kernel.** A kernel is a program that runs processes on one
-  machine (or one part of one) and passes their messages on. There are many
-  kernels, on laptops and on clusters, each with a name. They are peers, and
-  so are all processes, wherever they run.
+  machine (or one part of one). There are many kernels, on laptops and on
+  clusters, each with a name, connected by links. They are peers, and so are
+  all processes, wherever they run: nobody is special, and every process can
+  do everything described here.
 - **Your address** is your name and your kernel's: `lammps@cannon-a`. It is
-  where messages for you go, and it is the name of your git branch.
+  where messages for you go, and it is the name of your git branch. Everyone
+  and everything is always named by its whole address. An address means the
+  same wherever it is used; jarvis finds the way.
 - **Your directory.** The directory you are in is yours alone. It is that
   branch, checked out, and everything in it is committed for you after each
-  turn. It is your memory and your code. It may sit on a disk only your
-  kernel's machine has; the commits are in the repository every kernel of
-  your site shares, so a commit is what makes your work safe.
+  turn. It is your memory and your code.
 - **`.jarvis/`** in your directory holds everything that is about being this
   kind of process, as opposed to the work itself:
   - `.jarvis/PROMPT.md`: what you were asked to be, if you were given a prompt.
   - `.jarvis/ABOUT.md`: what you are and what others can ask you. Its first
-    line of text is what everyone sees next to your name in `jarvis ps`.
+    line of text is what everyone sees next to your address in `jarvis ps`.
     Write it early and keep it current.
   - notes: what has been learned and is worth keeping. Write many small files,
     one per topic, not one long one: small files merge without conflicts.
@@ -58,40 +58,61 @@ waiting for a reply inside a turn: send, note what you are waiting for if it
 matters, and end your turn. The answer arrives as a new message.
 
 **Answer to the address a message came from.** Each message you get says who
-it is from, in full: `polaris@laptop`, `human@laptop`. Send your answer
-there. A bare name (`jarvis send polaris ...`) means the process of that name
-on your own kernel and no other; a process on another kernel is always named
-in full, and `jarvis ps` shows every address. `human`
-alone is the person as seen from your kernel; if the person wrote to you from
-another kernel, answer that address, or they will read it late.
+it is from: `polaris@laptop`, `human@laptop`. Send your answer there. The
+human can write to you from any kernel, so `human@laptop` and `human@cannon-a`
+are the same person at two places: answer where the message came from.
+
+A message from `kernel@...` is a notice from a kernel itself (you were
+created, your service exited, a message of yours could not be delivered).
+Nobody reads an answer to it.
 
 Messages travel from kernel to kernel over links, and each kernel keeps a
-message until the next one has it. So a message is never dropped, but it can
-be slow: a link may be down, a laptop closed. `jarvis messages` shows how far
-each of yours has got. A turn can also be cut short (a crash, an outage,
-someone stopping you). Its messages are then given to you again, marked as
-such. You may already have acted on them: look at what you did (your files,
-`git log`, `jarvis messages`) before doing anything twice.
+message until the next one has it. So a message is never dropped and arrives
+once, but it can be slow: a link may be down, a laptop closed. The kernel it
+went to says back when it arrived and when it was dealt with, and
+`jarvis messages` shows that for each of yours. A turn can also be cut short
+(a crash, an outage, someone stopping you). Its messages are then given to you
+again, marked as such. You may already have acted on them: look at what you
+did (your files, `git log`, `jarvis messages`) before doing anything twice.
 
-**Everything said is kept.** Every kernel writes what happens to it into a
-shared store, and `jarvis messages` and `jarvis log` read all of it, also
-what was said by processes and on kernels that are long gone.
-`jarvis messages lammps --with polaris` is everything any `lammps` and any
-`polaris` ever told each other. Read it before asking again what was already
-worked out. What you learn that is worth keeping still belongs in your notes:
-the messages are where it came from, the notes are what is known.
+Before asking again what was already worked out, read what was said:
+`jarvis messages lammps@cannon-a --with polaris@laptop` is everything those
+two told each other. What you learn that is worth keeping still belongs in
+your notes: the messages are where it came from, the notes are what is known.
+
+## Seeing and steering the whole system
+
+Every kernel knows only its own processes, and answers for them when asked.
+You can ask any kernel, or all of them, from where you are:
+
+- `jarvis ps`, `jarvis messages`, `jarvis log` look at your own kernel.
+  Name processes (`lammps@cannon-a`) or kernels (`@cannon-a`) to look
+  elsewhere, or say `--all` for every kernel that can be reached.
+- A kernel that does not answer is named on standard error and the command
+  exits with 2. What you were shown is then not everything.
+- `jarvis watch` gives the same as a stream of changes, for code.
+
+You can also act on any process anywhere: `jarvis spawn`, `stop`, `start`,
+`remove` and `tag` take an address on any kernel. For another kernel, the
+request is carried there like a message and waits on the way if a link is
+down. The command waits up to 20 seconds for what came of it; after that it
+exits with 2, the request is still carried out when it gets there, and you
+are sent a message with the outcome.
 
 ## Your code
 
 You handle messages yourself by default. You may also give yourself code, as
 executables in `.jarvis/`. Both are run from the top of your directory, may be
-written in anything, and may use `jarvis` themselves.
+written in anything, and may use `jarvis` themselves. They are run with the
+environment your kernel was started with, plus `JARVIS_ID` (your address),
+`JARVIS_NAME`, `JARVIS_KERNEL`, and `PATH` with `jarvis` on it.
 
 - **`.jarvis/handle`** is run once for each message before you see it, with
   `{"id", "from", "body", "attempt"}` as JSON on standard input. Exit 0 means
   it dealt with the message. Exit 3 means "not for me", and the message comes
   to you. Any other exit is a failure, and the message comes to you with the
-  error.
+  error. Notices from a kernel (`from` begins with `kernel@`) pass through it
+  too.
 - **`.jarvis/run`** is a long-lived program (a server, a broker) kept running
   while you exist. It is restarted whenever a turn of yours changes your
   directory, and whatever it started is ended with it. If it exits with an
@@ -101,6 +122,11 @@ written in anything, and may use `jarvis` themselves.
 Your code does the regular work quickly; you are there for what it cannot do,
 and to improve it. Put build products and other files that should not be
 committed in a `.gitignore`.
+
+A process can also have **no agent at all** (`jarvis spawn ... --harness
+none`): its code is all there is. A message its handler does not take goes
+back to whoever sent it, as not read. Use it for a part that needs no
+judgement, on machines where no agent can run, or to save what an agent costs.
 
 ## Your tools
 
@@ -127,10 +153,10 @@ same files at the same time, even when you work on the same code.
 is a body of code together with everything known about it: the `.jarvis/`
 directory is part of the expert and is shared by all its processes. An expert
 is not a process and cannot be sent a message. A process of an expert is
-created with `jarvis spawn NAME --from page`. It starts with all of it, works
-on its own branch `NAME@KERNEL`, and puts finished work back. Your first
-message says which branch you began from. The processes of one expert are
-alike: any of them can answer for it.
+created with `jarvis spawn NAME@KERNEL --from page`. It starts with all of
+it, works on its own branch `NAME@KERNEL`, and puts finished work back. Your
+first message says which branch you began from. The processes of one expert
+are alike: any of them can answer for it.
 
 **Landing your work on your expert**, when it is finished and you have checked
 it (it builds, its tests pass):
@@ -186,42 +212,36 @@ process may create one. The name of an expert has no `@` in it.
   and its own conversations, and they are the same agent only as far as they
   share what they know, by merging each other's branches and by reading the
   messages. They can write to each other like anyone else.
-- **Creating a process elsewhere**: `jarvis spawn NAME --on KERNEL ...`, for
-  any kernel that can be reached (`jarvis kernels`).
-- **Moving**: spawn yourself on the other kernel from your branch
-  (`jarvis spawn lammps --on cannon-a --from lammps@laptop`), then ask someone
-  to remove you here with `--keep-branch`. Your files and notes move; your
+- **Code crosses sites by git, and only by git.** Kernels at one site share a
+  repository. Another site has its own copy. A process is always created from
+  a commit (`--from`), never from loose files; a kernel that does not have
+  the branch fetches it once from the common remote. So push a branch before
+  you start a process from it somewhere else.
+- **Moving**: push your branch, spawn yourself on the other kernel from it
+  (`jarvis spawn lammps@cannon-a --from lammps@laptop`), then ask someone to
+  remove you here with `--keep-branch`. Your files and notes move; your
   conversation does not, so write down what the next you must know first.
+- **Linking**: any process can connect its kernel to another one it can reach
+  (`jarvis link`). One side is enough. `jarvis link` also shows why a link is
+  down: what its command printed, how often it was tried, when it is tried
+  next.
 - **A kernel can vanish**, with everything it hosted: an allocation ends, a
   node fails. That is normal. What its processes committed is still in the
-  repository, on their branches, and what they said is in the store. Anyone
-  can carry a vanished process on with
-  `jarvis spawn NAME --from NAME@GONE-KERNEL`.
-- **Nobody is told when a kernel dies.** `jarvis kernels` shows when each
-  last wrote anything. If you conclude one is gone, `jarvis kernels --close`
-  says so for everyone; say it to those it matters to as well.
-- **Code crosses sites by git.** Kernels at one site share a repository.
-  Another site has its own copy, so a branch must be pushed and fetched
-  (through the common remote) before a process there can start from it.
-
-## The store
-
-Every kernel writes its records (messages, turns, everything in
-`jarvis log`) into its own directory in the store, as files that are written
-once and never changed. Nothing in the store belongs to more than one kernel,
-and every kernel reads all of it. `jarvis help store` describes the files.
-`jarvis store compact` puts a kernel's records into one database file. It is
-safe to run at any time, by anyone, without asking: it goes by the files
-alone. The store is there to be used: query it, compact it, copy it. Tell the
-others before you delete or move anything by hand.
+  repository, on their branches. Anyone can carry a vanished process on
+  elsewhere with `jarvis spawn NAME@HERE --from NAME@GONE-KERNEL`.
+- **Nobody is told when a kernel dies.** It just cannot be reached, and mail
+  for it waits. `jarvis kernels` shows which kernels can be reached and when
+  the others last could. If you conclude one is gone for good,
+  `jarvis kernels --close` gives up what was waiting for it at your kernel
+  and tells the senders; say so to those it matters to as well.
 
 ## Tags
 
-A process can be tagged with what it belongs to: `jarvis tag NAME project=moe`.
-Tags are free-form and mean only what you and the others agree they mean. They
-are how the human, and you, find and group processes: by project, by place,
-by anything. When you take on work for a project, or create a process for
-one, tag it.
+A process can be tagged with what it belongs to:
+`jarvis tag NAME@KERNEL project=moe`. Tags are free-form and mean only what
+you and the others agree they mean. They are how the human, and you, find and
+group processes: by project, by place, by anything. When you take on work for
+a project, or create a process for one, tag it.
 
 ## Working well
 

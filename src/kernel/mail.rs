@@ -359,9 +359,8 @@ impl Kernel {
         }
     }
 
-    /// Write down a problem that is the kernel's own, once per kind.
+    /// Write down a problem that is the kernel's own.
     pub(super) fn problem(&mut self, error: &str) {
-        eprintln!("jarvis: {error}");
         let me = self.addr(KERNEL);
         self.note(&me, "kernel_error", json!({"error": error}));
     }
