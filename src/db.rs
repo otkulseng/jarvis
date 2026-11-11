@@ -106,6 +106,12 @@ pub fn open(path: &Path) -> Res<Connection> {
     conn.busy_timeout(Duration::from_secs(15))?;
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if version == VERSION {
+        // Added after the first registries were made; making them again does nothing.
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS events_by_proc ON events (proc, kind, id);
+             CREATE INDEX IF NOT EXISTS messages_by_sender ON messages (sender, recipient, id);
+             CREATE INDEX IF NOT EXISTS messages_by_recipient ON messages (recipient, sender, id);",
+        )?;
         return Ok(conn);
     }
     let tables: i64 = conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'", [], |r| r.get(0))?;

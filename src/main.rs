@@ -23,6 +23,11 @@ use std::process::Command;
 use std::time::Duration;
 
 fn main() {
+    // A reader that stops reading (`jarvis log | head`) ends this program
+    // quietly, as it does any other command-line program.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     // `jarvis`, `jarvis help` and `jarvis --help` all print the grouped overview.
     let matches = Cli::command().override_help(cli::overview()).get_matches();
     let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
@@ -49,6 +54,7 @@ fn run(command: Cmd) -> Res<()> {
         Cmd::Messages(args) => messages(args),
         Cmd::Show(args) => show(args),
         Cmd::Log(args) => log(args),
+        Cmd::Watch(args) => watch(args),
     }
 }
 
@@ -634,7 +640,14 @@ fn send(args: cli::SendArgs) -> Res<()> {
 
 fn messages(args: cli::Messages) -> Res<()> {
     let conn = Home::find()?.open()?;
+    if args.pairs {
+        return pairs(&conn, args.json);
+    }
     let with = match &args.who {
+        Some(who) => Some(db::resolve(&conn, who)?),
+        None => None,
+    };
+    let other = match &args.with {
         Some(who) => Some(db::resolve(&conn, who)?),
         None => None,
     };
@@ -644,10 +657,11 @@ fn messages(args: cli::Messages) -> Res<()> {
                 strftime('%H:%M:%S', created_at / 1000, 'unixepoch', 'localtime')
          FROM messages
          WHERE id > ?1 AND (?2 IS NULL OR sender = ?2 OR recipient = ?2) AND (?3 = 0 OR status != 'handled')
+           AND (?5 IS NULL OR sender = ?5 OR recipient = ?5) AND (?6 IS NULL OR id < ?6)
          ORDER BY id DESC LIMIT ?4",
     )?;
     let mut rows: Vec<(Value, String)> = stmt
-        .query_map(params![args.after, with, args.waiting, count], |r| {
+        .query_map(params![args.after, with, args.waiting, count, other, args.before], |r| {
             Ok((
                 json!({
                     "id": r.get::<_, i64>(0)?, "at": r.get::<_, i64>(1)?, "from": r.get::<_, String>(2)?,
@@ -680,6 +694,184 @@ fn messages(args: cli::Messages) -> Res<()> {
     Ok(())
 }
 
+/// Who has written to whom, and how much.
+fn pairs(conn: &Connection, as_json: bool) -> Res<()> {
+    let mut stmt = conn.prepare(
+        "SELECT MIN(sender, recipient), MAX(sender, recipient), COUNT(*), SUM(status != 'handled'),
+                SUM(body LIKE '[jarvis]%'), MAX(created_at), MAX(id)
+         FROM messages WHERE sender != recipient GROUP BY 1, 2 ORDER BY 6",
+    )?;
+    let rows: Vec<Value> = stmt
+        .query_map([], |r| {
+            Ok(json!({
+                "a": r.get::<_, String>(0)?, "b": r.get::<_, String>(1)?, "count": r.get::<_, i64>(2)?,
+                "waiting": r.get::<_, i64>(3)?, "by_jarvis": r.get::<_, i64>(4)?, "last_at": r.get::<_, i64>(5)?,
+                "last_id": r.get::<_, i64>(6)?,
+            }))
+        })?
+        .collect::<Result<_, _>>()?;
+    if as_json {
+        println!("{}", Value::Array(rows));
+        return Ok(());
+    }
+    if rows.is_empty() {
+        println!("nobody has written to anybody yet");
+    }
+    for r in rows {
+        let waiting = match r["waiting"].as_i64().unwrap_or(0) {
+            0 => String::new(),
+            n => format!(", {n} waiting"),
+        };
+        println!(
+            "{} and {}: {} message(s){waiting}",
+            label(conn, r["a"].as_str().unwrap_or("")),
+            label(conn, r["b"].as_str().unwrap_or("")),
+            r["count"]
+        );
+    }
+    Ok(())
+}
+
+fn message_json(conn: &Connection, id: i64) -> Option<Value> {
+    conn.query_row(
+        "SELECT id, created_at, sender, recipient, body, status, attempts FROM messages WHERE id = ?1",
+        [id],
+        |r| {
+            Ok(json!({
+                "id": r.get::<_, i64>(0)?, "at": r.get::<_, i64>(1)?, "from": r.get::<_, String>(2)?,
+                "to": r.get::<_, String>(3)?, "body": r.get::<_, String>(4)?, "status": r.get::<_, String>(5)?,
+                "attempts": r.get::<_, i64>(6)?,
+            }))
+        },
+    )
+    .ok()
+}
+
+/// Print every change as a JSON line, for as long as someone is reading.
+fn watch(args: cli::Watch) -> Res<()> {
+    use std::collections::{BTreeSet, HashMap};
+    use std::io::Write;
+    let home = Home::find()?;
+    let conn = home.open()?;
+    let out = std::io::stdout();
+    // A reader that went away ends this quietly.
+    let say = |line: Value| -> bool {
+        let mut out = out.lock();
+        writeln!(out, "{line}").is_ok()
+    };
+
+    let mut cursor: i64 = match args.after {
+        Some(after) => after,
+        None => conn.query_row("SELECT COALESCE(MAX(id), 0) FROM events", [], |r| r.get(0))?,
+    };
+    // What was last said about each process, and its registry row then.
+    let mut said: HashMap<String, (String, String)> = HashMap::new();
+    // The messages not dealt with yet, and their status when last seen.
+    let mut open: HashMap<i64, (String, i64)> = HashMap::new();
+    let mut version: i64 = -1;
+    let mut first = true;
+
+    loop {
+        // Has any `jarvis` command or the kernel written anything since the last look?
+        let now: i64 = conn.query_row("PRAGMA data_version", [], |r| r.get(0))?;
+        if now != version {
+            version = now;
+            let mut touched: BTreeSet<String> = BTreeSet::new();
+
+            // New facts, in order. (The first look only says how things stand.)
+            while !first {
+                let mut stmt = conn.prepare_cached(
+                    "SELECT id, at, proc, kind, data FROM events WHERE id > ?1 AND (?2 OR kind != 'step') ORDER BY id LIMIT 2000",
+                )?;
+                let facts: Vec<(i64, i64, String, String, String)> = stmt
+                    .query_map(params![cursor, args.steps], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
+                    .collect::<Result<_, _>>()?;
+                let more = facts.len() == 2000;
+                for (id, at, proc, kind, data) in facts {
+                    cursor = id;
+                    let data: Value = serde_json::from_str(&data).unwrap_or(Value::Null);
+                    let mut line = json!({"kind": "fact", "fact": {"id": id, "at": at, "proc": proc, "kind": kind, "data": data}});
+                    if kind == "send" {
+                        if let Some(to) = data["to"].as_str() {
+                            touched.insert(to.to_string());
+                        }
+                        line["message"] = data["message"].as_i64().and_then(|m| message_json(&conn, m)).unwrap_or(Value::Null);
+                    }
+                    if kind != "step" {
+                        touched.insert(proc);
+                    }
+                    if !say(line) {
+                        return Ok(());
+                    }
+                }
+                if !more {
+                    break;
+                }
+            }
+
+            // Messages whose status changed.
+            let mut stmt = conn.prepare_cached("SELECT id, status, attempts FROM messages WHERE status != 'handled'")?;
+            let waiting: HashMap<i64, (String, i64)> =
+                stmt.query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))))?.collect::<Result<_, _>>()?;
+            let mut changed: Vec<i64> = waiting.iter().filter(|(id, state)| open.get(*id) != Some(*state)).map(|(id, _)| *id).collect();
+            changed.extend(open.keys().filter(|id| !waiting.contains_key(*id)));
+            changed.sort();
+            open = waiting;
+            if !first {
+                for id in changed {
+                    if let Some(message) = message_json(&conn, id) {
+                        for who in ["from", "to"] {
+                            touched.insert(message[who].as_str().unwrap_or("").to_string());
+                        }
+                        if !say(json!({"kind": "message", "message": message})) {
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+
+            // Processes: those something happened to, and those whose registry row changed.
+            let procs = db::procs(&conn)?;
+            for p in &procs {
+                let row = format!("{}|{}|{:?}|{}|{:?}", p.status, p.busy, p.busy_since, p.failures, p.session);
+                let known = said.get(&p.id);
+                if known.is_some_and(|(_, was)| *was == row) && !touched.contains(&p.id) {
+                    continue;
+                }
+                let described = describe(&home, &conn, p)?.to_string();
+                if known.is_some_and(|(was, _)| *was == described) {
+                    said.insert(p.id.clone(), (described, row));
+                    continue;
+                }
+                let line = format!("{{\"kind\":\"process\",\"process\":{described}}}");
+                said.insert(p.id.clone(), (described, row));
+                if writeln!(out.lock(), "{line}").is_err() {
+                    return Ok(());
+                }
+            }
+            let gone: Vec<String> = said.keys().filter(|name| !procs.iter().any(|p| &p.id == *name)).cloned().collect();
+            for name in gone {
+                said.remove(&name);
+                if !say(json!({"kind": "gone", "name": name})) {
+                    return Ok(());
+                }
+            }
+            if first {
+                first = false;
+                // The facts above the starting point, if any, are next.
+                version = -1;
+                if !say(json!({"kind": "ready", "cursor": cursor})) {
+                    return Ok(());
+                }
+            }
+            if out.lock().flush().is_err() {
+                return Ok(());
+            }
+        }
+        std::thread::sleep(Duration::from_millis(120));
+    }
+}
+
 fn show(args: cli::Show) -> Res<()> {
     let home = Home::find()?;
     let proc = find(&home.open()?, &args.who)?;
@@ -702,12 +894,16 @@ const STEPS: &str = "(?3 OR kind != 'step')";
 /// Facts after `after` (only those about `who`, if given), as lines for a
 /// terminal. `last` is moved to the newest fact seen.
 pub fn event_lines(conn: &Connection, after: i64, who: Option<&str>, steps: bool, last: &mut i64) -> Res<Vec<String>> {
+    event_lines_before(conn, after, None, who, steps, last)
+}
+
+fn event_lines_before(conn: &Connection, after: i64, before: Option<i64>, who: Option<&str>, steps: bool, last: &mut i64) -> Res<Vec<String>> {
     let mut stmt = conn.prepare_cached(&format!(
         "SELECT id, strftime('%H:%M:%S', at / 1000, 'unixepoch', 'localtime'), proc, kind, data
-         FROM events WHERE id > ?1 AND {ABOUT_PROC} AND {STEPS} ORDER BY id"
+         FROM events WHERE id > ?1 AND {ABOUT_PROC} AND {STEPS} AND (?4 IS NULL OR id < ?4) ORDER BY id"
     ))?;
     let rows: Vec<(i64, String, String, String, String)> = stmt
-        .query_map(params![after, who, steps], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
+        .query_map(params![after, who, steps, before], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
         .collect::<Result<_, _>>()?;
     let mut lines = Vec::new();
     for (id, time, proc, kind, data) in rows {
@@ -765,15 +961,15 @@ fn log(args: cli::Log) -> Res<()> {
     let count = args.count.unwrap_or(if args.json { 500 } else { 30 });
     // Start just before the oldest of the newest `count` facts.
     let window: i64 = conn.query_row(
-        &format!("SELECT COALESCE(MIN(id), 0) - 1 FROM (SELECT id FROM events WHERE id > ?1 AND {ABOUT_PROC} AND {STEPS} ORDER BY id DESC LIMIT ?4)"),
-        params![args.after.unwrap_or(0), who, args.steps, count],
+        &format!("SELECT COALESCE(MIN(id), 0) - 1 FROM (SELECT id FROM events WHERE id > ?1 AND {ABOUT_PROC} AND {STEPS} AND (?5 IS NULL OR id < ?5) ORDER BY id DESC LIMIT ?4)"),
+        params![args.after.unwrap_or(0), who, args.steps, count, args.before],
         |r| r.get(0),
     )?;
     let mut last = window.max(args.after.unwrap_or(0));
     if args.json {
-        let mut stmt = conn.prepare(&format!("SELECT id, at, proc, kind, data FROM events WHERE id > ?1 AND {ABOUT_PROC} AND {STEPS} ORDER BY id"))?;
+        let mut stmt = conn.prepare(&format!("SELECT id, at, proc, kind, data FROM events WHERE id > ?1 AND {ABOUT_PROC} AND {STEPS} AND (?4 IS NULL OR id < ?4) ORDER BY id"))?;
         let rows: Vec<Value> = stmt
-            .query_map(params![last, who, args.steps], |r| {
+            .query_map(params![last, who, args.steps, args.before], |r| {
                 let data: String = r.get(4)?;
                 Ok(json!({
                     "id": r.get::<_, i64>(0)?, "at": r.get::<_, i64>(1)?, "proc": r.get::<_, String>(2)?,
@@ -787,7 +983,7 @@ fn log(args: cli::Log) -> Res<()> {
     let mut printed = false;
     loop {
         let after = last;
-        for line in event_lines(&conn, after, who, args.steps, &mut last)? {
+        for line in event_lines_before(&conn, after, args.before, who, args.steps, &mut last)? {
             println!("{line}");
             printed = true;
         }

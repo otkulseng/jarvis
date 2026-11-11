@@ -20,7 +20,7 @@ const GROUPS: &[(&str, &[&str])] = &[
     ("Starting", &["init", "up"]),
     ("Processes", &["spawn", "ps", "stop", "start", "remove"]),
     ("Talking", &["send", "messages"]),
-    ("Looking", &["show", "log"]),
+    ("Looking", &["show", "log", "watch"]),
 ];
 
 /// What `jarvis`, `jarvis help` and `jarvis --help` print: every command with
@@ -218,6 +218,29 @@ pub enum Cmd {
         \x20 jarvis log lammps -n 100   the last 100 about lammps\n\
         \x20 jarvis log --json          for programs: every field of every fact")]
     Log(Log),
+
+    /// Follow every change as it happens, as JSON lines, for programs
+    #[command(long_about = "Follow every change as it happens, as JSON lines, for programs.\n\n\
+        Prints one JSON object per line and keeps running. It is how a program (a \
+        page, a monitor, a process's own code) stays up to date without asking again \
+        and again. The lines:\n\
+        \x20 {\"kind\":\"process\",\"process\":{...}}   a process as `jarvis ps --json` shows it:\n\
+        \x20                                         every process at the start, then each one\n\
+        \x20                                         whenever something about it changes\n\
+        \x20 {\"kind\":\"gone\",\"name\":NAME}           a process was removed\n\
+        \x20 {\"kind\":\"ready\",\"cursor\":N}           the start is complete; facts after N follow\n\
+        \x20 {\"kind\":\"fact\",\"fact\":{...}}         a fact as `jarvis log --json` shows it. A\n\
+        \x20                                         `send` fact also has `message`: the message\n\
+        \x20 {\"kind\":\"message\",\"message\":{...}}   a message whose status changed (it was\n\
+        \x20                                         taken up, dealt with, or put back)\n\n\
+        Facts come in order, each exactly once. Without --after, only facts from now \
+        on; with it, also the earlier ones above that number. A program that is cut \
+        off starts again with --after set to the last fact it saw.")]
+    #[command(after_long_help = "Examples:\n\
+        \x20 jarvis watch                  everything from now on\n\
+        \x20 jarvis watch --steps          also each step agents take\n\
+        \x20 jarvis watch --after 5120     continue after fact 5120")]
+    Watch(Watch),
 }
 
 #[derive(Args)]
@@ -311,9 +334,23 @@ pub struct Messages {
     #[arg(long)]
     pub waiting: bool,
 
+    /// Only messages between WHO and this other process (or `human`)
+    #[arg(long, value_name = "OTHER", requires = "who")]
+    pub with: Option<String>,
+
     /// Only messages with a number above this
     #[arg(long, value_name = "NUMBER", default_value_t = 0)]
     pub after: i64,
+
+    /// Only messages with a number below this (to read further back)
+    #[arg(long, value_name = "NUMBER")]
+    pub before: Option<i64>,
+
+    /// Instead of messages: for each two who have written to each other, how
+    /// many messages, how many of them waiting, how many written by jarvis on
+    /// someone's behalf, and when the last one was
+    #[arg(long, conflicts_with_all = ["who", "waiting"])]
+    pub pairs: bool,
 
     /// How many, counted from the newest [default: 20, or 500 with --json]
     #[arg(short = 'n', value_name = "COUNT")]
@@ -322,6 +359,17 @@ pub struct Messages {
     /// Print JSON instead of text
     #[arg(long)]
     pub json: bool,
+}
+
+#[derive(Args)]
+pub struct Watch {
+    /// Also print the facts above this number that are already there
+    #[arg(long, value_name = "NUMBER")]
+    pub after: Option<i64>,
+
+    /// Also print each step agents take inside their turns
+    #[arg(short = 's', long)]
+    pub steps: bool,
 }
 
 #[derive(Args)]
@@ -341,6 +389,10 @@ pub struct Log {
     /// Only facts with a number above this
     #[arg(long, value_name = "NUMBER")]
     pub after: Option<i64>,
+
+    /// Only facts with a number below this
+    #[arg(long, value_name = "NUMBER")]
+    pub before: Option<i64>,
 
     /// How many, counted from the newest [default: 30, or 500 with --json]
     #[arg(short = 'n', value_name = "COUNT")]

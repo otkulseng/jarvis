@@ -59,6 +59,7 @@ In another terminal:
     jarvis ps polaris    # everything about one process
     jarvis messages      # what was said
     jarvis log -f        # what is happening
+    jarvis watch         # the same as JSON lines, for programs: every change, once
     jarvis stop polaris  # end its turn and service now; its mail waits
     jarvis start polaris # let it go on
     jarvis remove scratch # delete it for good: directory, branch, mail, history
