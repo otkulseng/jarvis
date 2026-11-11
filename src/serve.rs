@@ -444,6 +444,9 @@ fn each_kernel(ctx: &Ctx, out: &mut dyn Out, by: &str, command: &str, who: &[Str
 /// processes named) or only the processes named.
 type Scope = Vec<(String, Vec<String>)>;
 
+/// Kernels that gave no answer, and why.
+type Silent = Vec<(String, String)>;
+
 /// Work out what a command looks at from what was typed: nothing means this
 /// kernel, `@K` a kernel, `NAME@K` a process, `--all` every kernel in reach.
 fn scope(ctx: &Ctx, what: &[String], all: bool) -> Res<Scope> {
@@ -479,7 +482,7 @@ fn typed(kernel: &str, procs: &[String]) -> Vec<String> {
 /// Rows from every kernel in the scope: this kernel's are worked out here by
 /// `here`, every other kernel is asked for `command ... --json`. Returns the
 /// rows, and for each kernel that gave none, why.
-fn gather(ctx: &Ctx, by: &str, scope: &Scope, command: &str, flags: &[String], here: impl Fn(&[String]) -> Res<Vec<Value>>) -> Res<(Vec<Value>, Vec<(String, String)>)> {
+fn gather(ctx: &Ctx, by: &str, scope: &Scope, command: &str, flags: &[String], here: impl Fn(&[String]) -> Res<Vec<Value>>) -> Res<(Vec<Value>, Silent)> {
     let mut rows = Vec::new();
     let mut asked = Vec::new();
     for (kernel, procs) in scope {
@@ -653,8 +656,8 @@ fn ps_rows(ctx: &Ctx, only: &[String]) -> Res<Vec<Value>> {
 
 fn ps(ctx: &Ctx, by: &str, args: cli::Ps, out: &mut dyn Out) -> Res<i32> {
     // One process: everything about it, from its own kernel.
-    if let [one] = args.what.as_slice() {
-        if !one.starts_with('@') {
+    if let [one] = args.what.as_slice()
+        && !one.starts_with('@') {
             let (_, kernel) = index::address(one, "process")?;
             if kernel != ctx.me {
                 let argv = ["ps", one.as_str()].iter().map(|w| w.to_string()).chain(args.json.then(|| "--json".to_string())).collect();
@@ -663,7 +666,6 @@ fn ps(ctx: &Ctx, by: &str, args: cli::Ps, out: &mut dyn Out) -> Res<i32> {
             ps_one(ctx, &local(ctx, one)?, args.json, out)?;
             return Ok(0);
         }
-    }
     let scope = scope(ctx, &args.what, args.all)?;
     let (rows, silent) = gather(ctx, by, &scope, "ps", &[], |only| ps_rows(ctx, only))?;
     if args.json {
@@ -781,9 +783,9 @@ fn kernels(ctx: &Ctx, as_json: bool, out: &mut dyn Out) -> Res<()> {
     }
     // Those that were reached before and cannot be now.
     let mut stmt = ctx.conn.prepare("SELECT name, version, closed, closed_by, last_reached FROM kernels ORDER BY name")?;
-    let known: Vec<(String, Option<String>, bool, Option<String>, i64)> =
-        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, i64>(2)? != 0, r.get(3)?, r.get(4)?)))?.collect::<Result<_, _>>()?;
-    for (name, version, closed, closed_by, last_reached) in known {
+    let mut known = stmt.query([])?;
+    while let Some(row) = known.next()? {
+        let (name, version, closed, closed_by, last_reached): (String, Option<String>, bool, Option<String>, i64) = (row.get(0)?, row.get(1)?, row.get::<_, i64>(2)? != 0, row.get(3)?, row.get(4)?);
         if name == ctx.me || net.reachable.iter().any(|r| r.name == name) {
             continue;
         }
@@ -1197,7 +1199,7 @@ fn log(ctx: &Ctx, by: &str, args: cli::Log, out: &mut dyn Out) -> Res<i32> {
             *newest = (*newest).max(id);
         }
     }
-    follow(ctx, by, scope, args.all, after, args.steps, out, &|line: &Value, out: &mut dyn Out| match line["kind"].as_str() {
+    follow(ctx, by, Followed { scope, all: args.all, after, steps: args.steps }, out, &|line: &Value, out: &mut dyn Out| match line["kind"].as_str() {
         Some("fact") => out.line(&fact_text(&line["fact"])),
         Some("lost") => {
             out.note(&format!("jarvis: the kernel `{}` is no longer followed: {}. It is followed again when it can be reached", line["kernel"].as_str().unwrap_or(""), line["why"].as_str().unwrap_or("")));
@@ -1219,13 +1221,22 @@ fn watch(ctx: &Ctx, by: &str, args: cli::Watch, out: &mut dyn Out) -> Res<i32> {
     }
     let scope = scope(ctx, &args.what, args.all)?;
     // Only this kernel: no going through other threads.
-    if let [(kernel, only)] = scope.as_slice() {
-        if *kernel == ctx.me && !args.all {
+    if let [(kernel, only)] = scope.as_slice()
+        && *kernel == ctx.me && !args.all {
             watch_here(ctx, only, after.get(&ctx.me).copied(), args.steps, out)?;
             return Ok(0);
         }
-    }
-    follow(ctx, by, scope, args.all, after, args.steps, out, &|line: &Value, out: &mut dyn Out| out.line(&line.to_string()))
+    follow(ctx, by, Followed { scope, all: args.all, after, steps: args.steps }, out, &|line: &Value, out: &mut dyn Out| out.line(&line.to_string()))
+}
+
+/// What to follow: which kernels and processes, whether also kernels that
+/// come into reach later, where each kernel's facts carry on from, and
+/// whether the steps inside turns are wanted.
+struct Followed {
+    scope: Scope,
+    all: bool,
+    after: HashMap<String, i64>,
+    steps: bool,
 }
 
 /// What a kernel that is followed sends.
@@ -1256,7 +1267,8 @@ impl Out for ToFeed {
 /// followed again, from where it stopped, when it can be reached; with
 /// `all`, kernels that come into reach are followed too. Each line is given
 /// to `show`, which says whether anyone is still reading.
-fn follow(ctx: &Ctx, by: &str, scope: Scope, all: bool, mut after: HashMap<String, i64>, steps: bool, out: &mut dyn Out, show: &dyn Fn(&Value, &mut dyn Out) -> bool) -> Res<i32> {
+fn follow(ctx: &Ctx, by: &str, what: Followed, out: &mut dyn Out, show: &dyn Fn(&Value, &mut dyn Out) -> bool) -> Res<i32> {
+    let Followed { scope, all, mut after, steps } = what;
     let (tx, fed) = mpsc::channel::<Fed>();
     let news = ctx.follow();
     let wake = tx.clone();
@@ -1402,10 +1414,11 @@ fn watch_here(ctx: &Ctx, only: &[String], after: Option<i64>, steps: bool, out: 
         let mut touched: BTreeSet<String> = BTreeSet::new();
 
         // New facts, in order. (The first look only says how things stand.)
-        while !first {
+        let mut more = !first;
+        while more {
             let mut stmt = conn.prepare_cached(&format!("SELECT {FACT_COLUMNS} FROM records WHERE seq > ?1 AND (?2 OR kind != 'step') ORDER BY seq LIMIT 2000"))?;
             let facts: Vec<Value> = stmt.query_map(params![cursor, steps], fact_row)?.collect::<Result<_, _>>()?;
-            let more = facts.len() == 2000;
+            more = facts.len() == 2000;
             for fact in facts {
                 cursor = fact["id"].as_i64().unwrap_or(cursor);
                 let kind = fact["kind"].as_str().unwrap_or("").to_string();
@@ -1418,7 +1431,7 @@ fn watch_here(ctx: &Ctx, only: &[String], after: Option<i64>, steps: bool, out: 
                 if kind != "step" {
                     touched.insert(proc.clone());
                 }
-                if !wanted(&proc) && !(brings && wanted(&to)) {
+                if !(wanted(&proc) || brings && wanted(&to)) {
                     continue;
                 }
                 let mut value = json!({"kind": "fact", "fact": fact});
@@ -1428,9 +1441,6 @@ fn watch_here(ctx: &Ctx, only: &[String], after: Option<i64>, steps: bool, out: 
                 if !out.line(&line(value)) {
                     return Ok(());
                 }
-            }
-            if !more {
-                break;
             }
         }
 

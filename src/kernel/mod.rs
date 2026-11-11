@@ -291,7 +291,7 @@ enum Agent {
     /// The kernel ended the turn (the process was stopped).
     Interrupted,
     /// The process has no agent, and its code did not take these messages.
-    NoAgent,
+    Absent,
 }
 
 pub struct Done {

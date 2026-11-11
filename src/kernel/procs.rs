@@ -53,8 +53,8 @@ impl Kernel {
     pub(super) fn put_to_rest(&mut self, name: &str) {
         self.end_run(name);
         let Some(live) = self.live.get_mut(name) else { return };
-        if let Some(cancel) = &live.cancel {
-            if !cancel.swap(true, Ordering::SeqCst) {
+        if let Some(cancel) = &live.cancel
+            && !cancel.swap(true, Ordering::SeqCst) {
                 // Ended in the background, so the others are not kept waiting.
                 let programs: Vec<(u32, String)> = {
                     let Ok(mut stmt) = self.db.prepare("SELECT pid, started FROM children WHERE proc = ?1 AND kind != 'run'") else { return };
@@ -62,7 +62,6 @@ impl Kernel {
                 };
                 thread::spawn(move || children::end_all(programs));
             }
-        }
         // Being started again is a fresh start.
         live.failures = 0;
         live.retry_at = None;
@@ -95,11 +94,10 @@ impl Kernel {
         if live.run.is_some() || live.busy || !is_executable(&program) {
             return Ok(());
         }
-        if let Some(commit) = &live.run_down_at {
-            if git::head(dir).as_deref() == Some(commit.as_str()) {
+        if let Some(commit) = &live.run_down_at
+            && git::head(dir).as_deref() == Some(commit.as_str()) {
                 return Ok(());
             }
-        }
         let log = File::create(self.cfg.run_log(name))?;
         let child = Command::new(&program)
             .current_dir(dir)
@@ -292,7 +290,7 @@ impl Kernel {
                 }
                 reply.lines().find(|l| !l.trim().is_empty()).unwrap_or("turn").chars().take(72).collect()
             }
-            Agent::NoAgent => {
+            Agent::Absent => {
                 // Nobody is there to read these: they go back to whoever sent them.
                 let why = format!("`{addr}` has no agent, and its code did not take the message");
                 for id in &done.for_agent {
@@ -413,7 +411,7 @@ impl Kernel {
                 return Err(format!("`{addr}` is already running; a kernel runs a name once (`jarvis ps {addr}` shows it)").into());
             }
             // Spawning what is stopped starts it.
-            let mut out = self.set_status(&[addr.clone()], true, by)?;
+            let mut out = self.set_status(std::slice::from_ref(&addr), true, by)?;
             out["o"] = json!([addr]);
             return Ok(out);
         }

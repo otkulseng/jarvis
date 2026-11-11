@@ -9,19 +9,17 @@ impl Kernel {
             if self.db.execute("DELETE FROM links WHERE spec = ?1", [spec])? == 0 {
                 return Err("this kernel has no such link. Give it exactly as `jarvis link` lists it".into());
             }
-            if let Some(id) = self.dials.remove(spec).and_then(|d| d.link) {
-                if let Some(link) = self.links.get(&id) {
+            if let Some(id) = self.dials.remove(spec).and_then(|d| d.link)
+                && let Some(link) = self.links.get(&id) {
                     (link.close)();
                 }
-            }
             self.publish_net();
             return Ok(said(vec!["the link is forgotten".into()], vec![]));
         }
-        if let Some(kernel) = serde_json::from_str::<Value>(spec)?["kernel"].as_str() {
-            if kernel == self.me {
+        if let Some(kernel) = serde_json::from_str::<Value>(spec)?["kernel"].as_str()
+            && kernel == self.me {
                 return Err("a kernel cannot be linked to itself".into());
             }
-        }
         self.db.execute("INSERT OR IGNORE INTO links (spec) VALUES (?1)", [spec])?;
         self.dials.entry(spec.to_string()).or_insert_with(Dial::new);
         self.publish_net();

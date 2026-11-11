@@ -140,11 +140,10 @@ impl Kernel {
     pub(super) fn post(&mut self, from: &str, to: &str, body: &str) -> Res<String> {
         let mut message = json!({"from": from, "to": to, "body": body});
         // What its sender had been given when it wrote this: the turn it is in.
-        if kernel_of(from) == self.me {
-            if let Some(turn) = self.live.get(name_of(from)).and_then(|l| l.turn) {
+        if kernel_of(from) == self.me
+            && let Some(turn) = self.live.get(name_of(from)).and_then(|l| l.turn) {
                 message["turn"] = json!(turn);
             }
-        }
         self.post_item(from, message)
     }
 
@@ -202,11 +201,10 @@ impl Kernel {
 
     /// A message sent from here could not be delivered: whoever sent it hears of it.
     pub(super) fn came_back(&mut self, id: &str, why: &str) -> Res<()> {
-        if let Some(waiter) = self.waiters.remove(id) {
-            if waiter.send(json!({"code": 1, "o": [], "e": [why]})).is_ok() {
+        if let Some(waiter) = self.waiters.remove(id)
+            && waiter.send(json!({"code": 1, "o": [], "e": [why]})).is_ok() {
                 return Ok(());
             }
-        }
         let Ok((sender, to)) = self.db.query_row("SELECT sender, recipient FROM messages WHERE id = ?1", [id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) else {
             return Ok(());
         };
@@ -228,11 +226,10 @@ impl Kernel {
         // What came of a request. A command that still waits for it prints
         // it; otherwise whoever asked is told.
         if item.get("code").is_some() {
-            if let Some(waiter) = self.waiters.remove(message) {
-                if waiter.send(json!({"code": item["code"], "o": item["o"], "e": item["e"]})).is_ok() {
+            if let Some(waiter) = self.waiters.remove(message)
+                && waiter.send(json!({"code": item["code"], "o": item["o"], "e": item["e"]})).is_ok() {
                     return Ok(());
                 }
-            }
             let outcome = if status == "handled" { "was carried out" } else { "could not be carried out" };
             let result = item["result"].as_str().unwrap_or("").trim();
             self.tell(&sender, &format!("[jarvis] Your request {message} to the kernel `{}` (`jarvis {body}`) {outcome}{}", kernel_of(&to), if result.is_empty() { ".".to_string() } else { format!(":\n{result}") }))?;

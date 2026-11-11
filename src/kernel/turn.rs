@@ -155,7 +155,7 @@ pub(super) fn turn(job: Job) -> Done {
     } else if for_agent.is_empty() {
         Agent::NotNeeded
     } else if job.harness.is_none() {
-        Agent::NoAgent
+        Agent::Absent
     } else {
         let mut header = format!(
             "[jarvis] You are `{}`: the process `{}` on the kernel `{}`. {} new message(s). \
