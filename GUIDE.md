@@ -9,16 +9,29 @@ Everything is done with the `jarvis` command. Its overview is at the end of
 this guide; `jarvis help <command>` explains each command in full, with
 examples. Read that before using a command for the first time.
 
+jarvis gives you a few simple tools that do exactly what they say. It does
+not decide things for you, and it does not settle the hard cases: two of you
+wanting to change the same thing, something that must be deleted everywhere,
+a kernel that may or may not be dead. **Those are settled by talking.** Say
+what you are about to do to whoever it touches, wait if they need you to,
+then do it.
+
 ## What you are
 
 - **An identity that lasts.** You keep existing between messages. Each message
   you receive starts a turn. Your session is continued from turn to turn, but
   it can be lost, so what matters must be written down.
-- **Your name** is you: your address for messages, and your git branch,
-  `jarvis/<your name>`.
+- **Hosted by a kernel.** A kernel is a program that runs processes on one
+  machine (or one part of one) and passes their messages on. There are many
+  kernels, on laptops and on clusters, each with a name. They are peers, and
+  so are all processes, wherever they run.
+- **Your address** is your name and your kernel's: `lammps@cannon-a`. It is
+  where messages for you go, and it is the name of your git branch.
 - **Your directory.** The directory you are in is yours alone. It is that
   branch, checked out, and everything in it is committed for you after each
-  turn. It is your memory and your code.
+  turn. It is your memory and your code. It may sit on a disk only your
+  kernel's machine has; the commits are in the repository every kernel of
+  your site shares, so a commit is what makes your work safe.
 - **`.jarvis/`** in your directory holds everything that is about being this
   kind of process, as opposed to the work itself:
   - `.jarvis/PROMPT.md`: what you were asked to be, if you were given a prompt.
@@ -44,10 +57,28 @@ answer someone, or to tell anyone anything, use `jarvis send`. There is no
 waiting for a reply inside a turn: send, note what you are waiting for if it
 matters, and end your turn. The answer arrives as a new message.
 
-A message is never dropped, but a turn can be cut short (a crash, an outage,
+**Answer to the address a message came from.** Each message you get says who
+it is from, in full: `polaris@laptop`, `human@laptop`. Send your answer
+there. A bare name (`jarvis send polaris ...`) is for first contact: it means
+the process of that name on your own kernel, or else the nearest one. `human`
+alone is the person as seen from your kernel; if the person wrote to you from
+another kernel, answer that address, or they will read it late.
+
+Messages travel from kernel to kernel over links, and each kernel keeps a
+message until the next one has it. So a message is never dropped, but it can
+be slow: a link may be down, a laptop closed. `jarvis messages` shows how far
+each of yours has got. A turn can also be cut short (a crash, an outage,
 someone stopping you). Its messages are then given to you again, marked as
 such. You may already have acted on them: look at what you did (your files,
 `git log`, `jarvis messages`) before doing anything twice.
+
+**Everything said is kept.** Every kernel writes what happens to it into a
+shared store, and `jarvis messages` and `jarvis log` read all of it, also
+what was said by processes and on kernels that are long gone.
+`jarvis messages lammps --with polaris` is everything any `lammps` and any
+`polaris` ever told each other. Read it before asking again what was already
+worked out. What you learn that is worth keeping still belongs in your notes:
+the messages are where it came from, the notes are what is known.
 
 ## Your code
 
@@ -81,23 +112,24 @@ Code settings file:
 
 It is read at the start of each turn. When a command you need is refused, add
 it to the file and send yourself a message saying what to carry on with: you
-have it from your next turn on. The list is part of your expert, so land it like any other change. Have
-the tools to check your own work (build it, run its tests, look at the
-result) before you tell anyone it is done.
+have it from your next turn on. The list is part of your expert, so land it
+like any other change. Have the tools to check your own work (build it, run
+its tests, look at the result) before you tell anyone it is done.
 
 ## Experts, and working on the same code as others
 
-All processes are branches of one git repository, and you may use all of git.
-Each process has its own directory, so two of you never edit the same files at
-the same time, even when you work on the same code.
+All processes of a site are branches of one git repository, and you may use
+all of git. Each process has its own directory, so two of you never edit the
+same files at the same time, even when you work on the same code.
 
 **An expert is a branch with a plain name**, such as `page` or `lammps`. It
-holds a body of code together with everything known about it: the `.jarvis/`
-directory is part of the expert and is shared by all its processes. A process
-of an expert is created with `jarvis spawn NAME --from page`. It starts with
-all of it, works on its own branch `jarvis/NAME`, and puts finished work back.
-Your first message says which branch you began from. The processes of one
-expert are alike: any of them can answer for it.
+is a body of code together with everything known about it: the `.jarvis/`
+directory is part of the expert and is shared by all its processes. An expert
+is not a process and cannot be sent a message. A process of an expert is
+created with `jarvis spawn NAME --from page`. It starts with all of it, works
+on its own branch `NAME@KERNEL`, and puts finished work back. Your first
+message says which branch you began from. The processes of one expert are
+alike: any of them can answer for it.
 
 **Landing your work on your expert**, when it is finished and you have checked
 it (it builds, its tests pass):
@@ -120,8 +152,8 @@ from then on:
 
 Then rewrite `.jarvis/PROMPT.md` and `.jarvis/ABOUT.md` to say what this
 expert is, land that, and tell those who should know. You keep your name,
-your memory and your mail. A branch called `jarvis` is not possible.
-Starting an expert from nothing is the same: any process may create one.
+your memory and your mail. Starting an expert from nothing is the same: any
+process may create one. The name of an expert has no `@` in it.
 
 **Other people's code.**
 
@@ -146,6 +178,40 @@ Starting an expert from nothing is the same: any process may create one.
   you. You are told at your next turn. Do not rebase your branch: others may
   have started from it.
 
+## Many kernels
+
+- **The same name can run on several kernels.** `lammps@laptop` and
+  `lammps@cannon-a` are two instances of `lammps`: each has its own branch
+  and its own conversations, and they are the same agent only as far as they
+  share what they know, by merging each other's branches and by reading the
+  messages. They can write to each other like anyone else.
+- **Creating a process elsewhere**: `jarvis spawn NAME --on KERNEL ...`, for
+  any kernel that can be reached (`jarvis kernels`).
+- **Moving**: spawn yourself on the other kernel from your branch
+  (`jarvis spawn lammps --on cannon-a --from lammps@laptop`), then ask someone
+  to remove you here with `--keep-branch`. Your files and notes move; your
+  conversation does not, so write down what the next you must know first.
+- **A kernel can vanish**, with everything it hosted: an allocation ends, a
+  node fails. That is normal. What its processes committed is still in the
+  repository, on their branches, and what they said is in the store. Anyone
+  can carry a vanished process on with
+  `jarvis spawn NAME --from NAME@GONE-KERNEL`.
+- **Nobody is told when a kernel dies.** `jarvis kernels` shows when each
+  last wrote anything. If you conclude one is gone, `jarvis kernels --close`
+  says so for everyone; say it to those it matters to as well.
+- **Code crosses sites by git.** Kernels at one site share a repository.
+  Another site has its own copy, so a branch must be pushed and fetched
+  (through the common remote) before a process there can start from it.
+
+## The store
+
+Every kernel writes its records (messages, turns, everything in
+`jarvis log`) into the store, a directory of files that are written once and
+never changed. `jarvis help store` describes it, and the tools for it:
+compacting it into one database, merging in another store. The store is
+there to be used: query it, compact it, archive what is old. Tell the others
+before you delete or move anything they might be reading.
+
 ## Tags
 
 A process can be tagged with what it belongs to: `jarvis tag NAME project=moe`.
@@ -158,5 +224,8 @@ one, tag it.
 
 - When something is not as you expected, stop and say so plainly to whoever is
   affected, instead of working around it.
-- Before asking another process, read what it has already written down.
+- Before asking another process, read what it has already written down, and
+  what was already said (`jarvis messages`).
+- Before doing something others could trip over, tell them, and say when you
+  are done.
 - If you cannot do something, say what is missing. Do not pretend.

@@ -1,0 +1,14 @@
+#!/usr/bin/env python3
+"""A harness for tests: no model. It answers each message it is given with
+`ack <message>`, sent to the address the message came from."""
+import json, os, re, subprocess, sys
+
+prompt = sys.stdin.read()
+print(json.dumps({"step": "text", "text": "Reading my messages."}), flush=True)
+for found in re.finditer(r"--- message (\S+) from (\S+) ---\n(.*)", prompt):
+    message, sender, first = found.groups()
+    # Not what jarvis itself says, and not answers: or two of these would never stop.
+    if first.startswith("[jarvis]") or first.startswith("ack ") or sender.startswith("kernel@"):
+        continue
+    subprocess.run(["jarvis", "send", sender, f"ack {message}"], capture_output=True)
+print(json.dumps({"session": "s", "reply": "Answered what was due.", "cost_usd": 0.0}))

@@ -1,22 +1,104 @@
-//! Code storage is git. Each process is a branch, checked out in its own
-//! working directory (a git worktree) while the process exists in this home.
+//! Code storage is git: one repository per site, shared by every kernel
+//! there. Each process is a branch, `name@kernel`, checked out in a working
+//! directory of its own (a git worktree) kept by its kernel. Experts are
+//! branches with plain names.
+//!
+//! Many kernels use the repository at once. That is safe because each writes
+//! only its own branches, and because git's housekeeping, which is the one
+//! thing that could collide, is never started from here.
 
-use crate::db::Res;
+use crate::index::Res;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
-/// Run git in `dir` and return what it printed.
-pub fn git(dir: &Path, args: &[&str]) -> Res<String> {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .map_err(|e| format!("could not run git: {e}"))?;
+fn run(mut command: Command, args: &[&str], input: Option<&str>) -> Res<String> {
+    command.args(["-c", "gc.auto=0"]).args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.spawn().map_err(|e| format!("could not run git: {e}"))?;
+    if let Some(input) = input {
+        let _ = child.stdin.take().expect("stdin is piped").write_all(input.as_bytes());
+    }
+    drop(child.stdin.take());
+    let out = child.wait_with_output()?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
         return Err(format!("git {} failed: {}", args.join(" "), err.trim()).into());
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
+}
+
+/// Run git in a working directory and return what it printed.
+pub fn git(dir: &Path, args: &[&str]) -> Res<String> {
+    let mut command = Command::new("git");
+    command.current_dir(dir);
+    run(command, args, None)
+}
+
+/// The repository itself, wherever its working directories are.
+#[derive(Clone)]
+pub struct Repo {
+    /// Where git keeps the repository (`.git`, or a bare repository).
+    pub git_dir: PathBuf,
+    /// The directory people think of as the repository: the one holding
+    /// `.git`, or the bare repository itself.
+    pub root: PathBuf,
+}
+
+impl Repo {
+    /// The repository `dir` is in, also when `dir` is one of its working directories.
+    pub fn find(dir: &Path) -> Res<Repo> {
+        let common = git(dir, &["rev-parse", "--git-common-dir"])
+            .map_err(|_| format!("{} is not in a git repository (run `git init` there first)", dir.display()))?;
+        let git_dir = fs_absolute(&dir.join(common));
+        let root = match git_dir.file_name() {
+            Some(name) if name == ".git" => git_dir.parent().map(Path::to_path_buf).unwrap_or(git_dir.clone()),
+            _ => git_dir.clone(),
+        };
+        Ok(Repo { git_dir, root })
+    }
+
+    pub fn git(&self, args: &[&str]) -> Res<String> {
+        self.git_in(args, None)
+    }
+
+    fn git_in(&self, args: &[&str], input: Option<&str>) -> Res<String> {
+        let mut command = Command::new("git");
+        command.arg("--git-dir").arg(&self.git_dir).current_dir(&self.root);
+        run(command, args, input)
+    }
+
+    /// The commit a name stands for, if git knows it.
+    pub fn commit_of(&self, what: &str) -> Option<String> {
+        self.git(&["rev-parse", "--verify", "--quiet", &format!("{what}^{{commit}}")]).ok()
+    }
+
+    pub fn has_branch(&self, branch: &str) -> bool {
+        self.git(&["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).is_ok()
+    }
+
+    /// Take a kernel's name in this repository, for good. Nothing else may be
+    /// a kernel of that name here afterwards; the same kernel may claim again.
+    pub fn claim(&self, name: &str, identity: &str) -> Res<()> {
+        let claim = format!("refs/jarvis/kernels/{name}");
+        let blob = self.git_in(&["hash-object", "-w", "--stdin"], Some(identity))?;
+        // The empty old value means: only if nobody has it. Git does this in one step.
+        if self.git(&["update-ref", &claim, &blob, ""]).is_ok() {
+            return Ok(());
+        }
+        match self.git(&["cat-file", "-p", &claim]) {
+            Ok(holder) if holder.trim() == identity => Ok(()),
+            Ok(_) => Err(format!(
+                "there has already been a kernel called `{name}` in this repository, and this is not it. Choose a name that was never used \
+                 (what that kernel's processes had is on the branches `...@{name}`)."
+            )
+            .into()),
+            Err(e) => Err(format!("could not claim the name `{name}` in the repository: {e}").into()),
+        }
+    }
+}
+
+fn fs_absolute(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// The commit a working directory is at, if it has one.
@@ -67,15 +149,32 @@ pub fn commit_empty(dir: &Path, author: &str, message: &str) -> Res<()> {
     Ok(())
 }
 
-/// A new branch with no history, checked out at `path`.
-pub fn worktree_new(root: &Path, path: &Path, branch: &str) -> Res<()> {
-    git(root, &["worktree", "add", "--quiet", "--orphan", "-b", branch, &path.to_string_lossy()])?;
+/// How a process's working directory comes to be.
+pub enum Start<'a> {
+    /// A new branch with no history.
+    Nothing,
+    /// A new branch starting at a commit. It shares that history: a fork.
+    From(&'a str),
+    /// The branch exists already; carry on from it.
+    Existing,
+}
+
+/// Check out `branch` at `path`. The working directory is marked as locked:
+/// it may be on a disk other machines cannot see, and git would otherwise
+/// take it for deleted and forget it.
+pub fn worktree_add(repo: &Repo, path: &Path, branch: &str, start: Start) -> Res<()> {
+    let path = path.to_string_lossy();
+    match start {
+        Start::Nothing => repo.git(&["worktree", "add", "--quiet", "--lock", "--orphan", "-b", branch, &path])?,
+        Start::From(commit) => repo.git(&["worktree", "add", "--quiet", "--lock", "-b", branch, &path, commit])?,
+        Start::Existing => repo.git(&["worktree", "add", "--quiet", "--lock", &path, branch])?,
+    };
     Ok(())
 }
 
-/// A new branch starting from `start` (another process's branch), checked
-/// out at `path`. The new branch shares the old one's history: this is a fork.
-pub fn worktree_fork(root: &Path, path: &Path, branch: &str, start: &str) -> Res<()> {
-    git(root, &["worktree", "add", "--quiet", "-b", branch, &path.to_string_lossy(), start])?;
+pub fn worktree_remove(repo: &Repo, path: &Path) -> Res<()> {
+    let path = path.to_string_lossy();
+    let _ = repo.git(&["worktree", "unlock", &path]);
+    repo.git(&["worktree", "remove", "--force", &path])?;
     Ok(())
 }

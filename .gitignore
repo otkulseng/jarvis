@@ -28,9 +28,12 @@ rustc-ice-*.txt
 
 /target
 
-# jarvis: what this home keeps for itself (the registry, the working
-# directories of its processes, their logs). Only these are ignored, so that
-# a process's own `.jarvis/` directory in its tree is never hidden.
+# jarvis: what kernels keep inside this directory (their own state, and the
+# store of records). Only these are ignored, so that a process's own
+# `.jarvis/` directory in its tree is never hidden.
+/.jarvis/kernel/
+/.jarvis/store/
+# From before kernels had names.
 /.jarvis/jarvis.db*
 /.jarvis/proc/
 /.jarvis/log/
