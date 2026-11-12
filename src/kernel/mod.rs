@@ -298,6 +298,8 @@ pub struct Done {
     name: String,
     by_code: Vec<String>,
     for_agent: Vec<String>,
+    /// The messages the process's code failed on, with how it failed.
+    code_failed: Vec<(String, String)>,
     agent: Agent,
 }
 
@@ -389,6 +391,31 @@ pub struct Kernel {
     last_ping: Instant,
 }
 
+/// Allow this kernel as many open files as the system lets it have. Every
+/// program of a turn, every command a process runs and every commit holds a
+/// few at once, and the usual allowance (256 on macOS, 1024 on Linux) is
+/// used up when some dozens of processes work at the same moment.
+fn raise_open_files() {
+    unsafe {
+        let mut limit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) != 0 {
+            return;
+        }
+        // Not more than this: programs that close every file they might
+        // have inherited get slow when the allowance is huge. And macOS
+        // refuses what is above its own ceiling: then ask for less.
+        for wanted in [1 << 16, 10240, 4096] {
+            let wanted = wanted.min(limit.rlim_max);
+            if wanted <= limit.rlim_cur {
+                return;
+            }
+            if libc::setrlimit(libc::RLIMIT_NOFILE, &libc::rlimit { rlim_cur: wanted, rlim_max: limit.rlim_max }) == 0 {
+                return;
+            }
+        }
+    }
+}
+
 /// `jarvis up`: set a kernel up, run it until it is told to stop.
 pub fn up(args: cli::Up) -> Res<()> {
     // A link's command or a client can end while the kernel is writing to
@@ -397,6 +424,7 @@ pub fn up(args: cli::Up) -> Res<()> {
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_IGN);
     }
+    raise_open_files();
     let name = args.name.clone();
     index::check_name(&name, "kernel")?;
     if matches!(name.as_str(), HUMAN | KERNEL) {

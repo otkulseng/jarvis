@@ -90,6 +90,8 @@ impl Kernel {
             if let Some(proc) = self.find(name_of(to))? {
                 if proc.status != "alive" {
                     notes.push(format!("{to} is stopped; the message waits until `jarvis start {to}`"));
+                } else if proc.failures > 0 && proc.harness == NO_AGENT {
+                    notes.push(format!("the code of {to} failed on the last {} message(s) it got (`jarvis ps {to}` shows why)", proc.failures));
                 } else if proc.failures > 0 {
                     notes.push(format!("the last {} turn(s) of {to} failed; the message waits while the kernel keeps trying (`jarvis ps {to}` shows why)", proc.failures));
                 }

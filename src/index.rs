@@ -334,7 +334,15 @@ fn apply(conn: &Connection, r: &Rec, seq: i64) -> Res<()> {
                 )?;
             }
         }
-        "handled_by_code" => handled("messages")?,
+        "handled_by_code" => {
+            handled("messages")?;
+            // Its code works (again).
+            conn.execute("UPDATE procs SET failures = 0 WHERE addr = ?1 AND harness = 'none'", [&r.proc])?;
+        }
+        // It has no agent, and its code failed on what it got.
+        "code_failed" => {
+            conn.execute("UPDATE procs SET failures = ?2 WHERE addr = ?1", params![r.proc, d["failures"].as_i64().unwrap_or(1)])?;
+        }
         "turn" => {
             handled("messages")?;
             if let Some(session) = d["session"].as_str() {

@@ -125,7 +125,9 @@ committed in a `.gitignore`.
 
 A process can also have **no agent at all** (`jarvis spawn ... --harness
 none`): its code is all there is. A message its handler does not take goes
-back to whoever sent it, as not read. Use it for a part that needs no
+back to whoever sent it, as not read. If the handler fails, the sender gets
+the end of its error output, and the process shows as `failing` in
+`jarvis ps` until its code handles a message again. Use it for a part that needs no
 judgement, on machines where no agent can run, or to save what an agent costs.
 
 ## Your tools

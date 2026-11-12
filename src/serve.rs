@@ -625,7 +625,8 @@ fn describe(ctx: &Ctx, p: &Proc) -> Res<Value> {
     let mail: i64 = conn
         .prepare_cached("SELECT COUNT(*) FROM messages WHERE recipient = ?1 AND status IN ('pending', 'taken')")?
         .query_row([&p.addr], |r| r.get(0))?;
-    // `failing`: its last turn failed, and its mail is waiting for the next try.
+    // `failing`: its last turn failed, and its mail is waiting for the next
+    // try; or it has no agent and its code failed on what it last got.
     let state = if p.status != "alive" {
         "stopped"
     } else if p.busy {
@@ -774,6 +775,15 @@ fn ps_one(ctx: &Ctx, p: &Proc, as_json: bool, out: &mut dyn Out) -> Res<()> {
                 }
             }
         },
+    }
+    // What its code did with the last message it got, if that went wrong.
+    if let Some((at, kind, data)) = last_of("'code_failed', 'handled_by_code'")
+        && kind == "code_failed"
+    {
+        line("its code", format!("{} ago: FAILED, {} in a row. The error:", ago(at), data["failures"]));
+        for text in data["error"].as_str().unwrap_or("").lines() {
+            line("", text.to_string());
+        }
     }
     Ok(())
 }
@@ -1125,6 +1135,7 @@ fn fact_text(fact: &Value) -> String {
         }
         "turn_start" => format!("turn started on {} message(s)", d["messages"].as_array().map_or(0, Vec::len)),
         "turn_failed" => format!("TURN FAILED ({} in a row, next try in {}s): {}", d["failures"], d["retry_in_s"], clip(&text("error"), 200)),
+        "code_failed" => format!("ITS CODE FAILED ({} in a row) on {} message(s): {}", d["failures"], d["messages"].as_array().map_or(0, Vec::len), clip(&text("error"), 200)),
         "turn_interrupted" => "turn interrupted; its mail waits".to_string(),
         "turn_end" => "turn ended".to_string(),
         "spawn" if d["continued"] == true => format!("carried on here by {}", text("parent")),

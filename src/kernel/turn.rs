@@ -120,7 +120,7 @@ pub(super) fn turn(job: Job) -> Done {
     let conn = conn.as_ref();
     let cancelled = || job.cancel.load(Ordering::SeqCst);
     let has_handle = is_executable(&job.dir.join(".jarvis/handle"));
-    let (mut by_code, mut for_agent, mut prompt) = (Vec::new(), Vec::new(), String::new());
+    let (mut by_code, mut for_agent, mut code_failed, mut prompt) = (Vec::new(), Vec::new(), Vec::new(), String::new());
     for mail in &job.mail {
         let mut failure = None;
         if has_handle {
@@ -147,6 +147,7 @@ pub(super) fn turn(job: Job) -> Done {
         }
         if let Some(error) = failure {
             prompt.push_str(&format!("[jarvis] Your .jarvis/handle failed on this message:\n{error}\n"));
+            code_failed.push((mail.id.clone(), error));
         }
         prompt.push('\n');
     }
@@ -176,5 +177,5 @@ pub(super) fn turn(job: Job) -> Done {
             Err(error) => Agent::Failed(error),
         }
     };
-    Done { name: job.name, by_code, for_agent, agent }
+    Done { name: job.name, by_code, for_agent, code_failed, agent }
 }

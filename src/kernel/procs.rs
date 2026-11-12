@@ -291,10 +291,20 @@ impl Kernel {
                 reply.lines().find(|l| !l.trim().is_empty()).unwrap_or("turn").chars().take(72).collect()
             }
             Agent::Absent => {
-                // Nobody is there to read these: they go back to whoever sent them.
-                let why = format!("`{addr}` has no agent, and its code did not take the message");
+                // Nobody is there to read these: they go back to whoever sent
+                // them, with how the code failed if that is why.
                 for id in &done.for_agent {
+                    let why = match done.code_failed.iter().find(|(failed, _)| failed == id) {
+                        Some((_, error)) => format!("`{addr}` has no agent, and its code failed on the message: {}", tail(error, 15)),
+                        None => format!("`{addr}` has no agent, and its code did not take the message"),
+                    };
                     self.undeliverable(id, &why)?;
+                }
+                if let Some((_, error)) = done.code_failed.last() {
+                    // Its code is broken, which shows on the process until it works again.
+                    failures = self.live.get(name).map_or(0, |l| l.failures) + 1;
+                    let messages: Vec<&String> = done.code_failed.iter().map(|(id, _)| id).collect();
+                    self.rec(addr, "code_failed", json!({"messages": messages, "error": error, "failures": failures}))?;
                 }
                 self.rec(addr, "turn_end", json!({}))?;
                 "handled by code".into()
@@ -456,13 +466,25 @@ impl Kernel {
             let _ = git::worktree_remove(&repo, &dir);
             let _ = fs::remove_dir_all(&dir);
         }
-        git::worktree_add(&repo, &dir, &branch, match (&start, continued) {
+        // From here on a failure must not leave half a process behind: git
+        // may have made the branch and part of the directory before it failed.
+        let undo = || {
+            let _ = git::worktree_remove(&repo, &dir);
+            let _ = fs::remove_dir_all(&dir);
+            let _ = repo.git(&["worktree", "prune"]);
+            if !continued {
+                let _ = repo.git(&["branch", "-D", &branch]);
+            }
+        };
+        let added = git::worktree_add(&repo, &dir, &branch, match (&start, continued) {
             (_, true) => git::Start::Existing,
             (Some(commit), false) => git::Start::From(commit),
             (None, false) => git::Start::Nothing,
-        })?;
-
-        // From here on a failure must not leave half a process behind.
+        });
+        if let Err(e) = added {
+            undo();
+            return Err(format!("could not create `{addr}`: {e}").into());
+        }
         let fill = |kernel: &mut Kernel| -> Res<()> {
             if let Some(prompt) = &prompt {
                 fs::create_dir_all(dir.join(".jarvis"))?;
@@ -476,10 +498,7 @@ impl Kernel {
             Ok(())
         };
         if let Err(e) = fill(self) {
-            let _ = git::worktree_remove(&repo, &dir);
-            if !continued {
-                let _ = repo.git(&["branch", "-D", &branch]);
-            }
+            undo();
             return Err(format!("could not create `{addr}`: {e}").into());
         }
         self.live.remove(name);

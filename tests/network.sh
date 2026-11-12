@@ -189,7 +189,16 @@ on a send probe@c "skip this" > /dev/null
 came_back() { on a messages human@a --json | has "any('could not be delivered' in m['body'] and 'has no agent' in m['body'] for m in x)"; }
 until_ok 20 came_back
 on a messages probe@c --json | has "any(m['body']=='skip this' and m['status']=='undeliverable' for m in x)"
-echo "a process with no agent answered with its code, and what it did not take came back"
+# Code that fails says how, to the sender and on the process, until it works again.
+on a send probe@c "break here" > /dev/null
+broke() { on a messages human@a --json | has "any('its code failed' in m['body'] and 'broke on purpose' in m['body'] for m in x)"; }
+until_ok 20 broke
+on a ps probe@c --json | has "x['state']=='failing' and x['failures']==1"
+on a ps probe@c | grep -q "broke on purpose"
+on a send probe@c "ping two" > /dev/null
+works_again() { state_of a probe@c idle; }
+until_ok 20 works_again
+echo "a process with no agent answered with its code; what it did not take came back, and a failure of its code was shown"
 
 step="a second way round"
 # A link through a command, straight from a to c.
