@@ -1,7 +1,7 @@
 //! A dialect: what its symbols equal in other dialects, and the code that
 //! computes them.
 
-use crate::{applied, dialect_of, make, Applied, Node, ANY};
+use crate::{applied, dialect_of, graph, make, Applied, Node, ANY};
 use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -163,13 +163,10 @@ pub(crate) fn written(node: Node) -> String {
 
 /// The dialects whose symbols an expression is written in.
 fn dialects_in(node: Node) -> BTreeSet<String> {
-    let made = applied(node);
-    let mut all = BTreeSet::new();
-    if made.symbol != ANY {
-        all.insert(dialect_of(&made.symbol).unwrap_or(&made.symbol).to_string());
-    }
-    for input in made.inputs {
-        all.extend(dialects_in(input));
-    }
-    all
+    graph(node)
+        .steps
+        .iter()
+        .filter(|step| step.symbol != ANY)
+        .map(|step| dialect_of(&step.symbol).unwrap_or(&step.symbol).to_string())
+        .collect()
 }

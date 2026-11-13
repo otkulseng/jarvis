@@ -1,32 +1,32 @@
-# Why `map` is slow with large equivalences (found 2026-11-13, not fixed)
+# Equivalences go to egglog as DAGs, never as nested expressions
 
-It is not egglog and not equality saturation. It is `pattern()` in
-`src/map.rs`: it writes each side of an equivalence as one nested
-expression, so a node that is used twice is written out twice, and so is
-everything under it. An equivalence is a DAG in nary (nodes are
-hash-consed), and becomes a tree for egglog.
+Found and fixed 2026-11-13. Keep it this way.
 
-Measured (release): n Euler steps `add(p, mul(dt, div(neg(p), m)))`, where
-`p` is used twice per step, so the tree doubles with each step:
+An equivalence is a DAG in nary (nodes are hash-consed). `map` first wrote
+each side as one nested egglog expression, so a node used twice was written
+twice, with everything under it. For n Euler steps
+`add(p, mul(dt, div(neg(p), m)))`, where `p` is used twice per step, the
+rule doubled with each step:
 
-    steps  DAG nodes  map
+    steps  DAG nodes  map (before)
       6       25        9 ms
       8       33       35 ms
      10       41      306 ms
-     11       45      1.16 s
      12       49      4.58 s
 
-The same physics written with `p` used once per step: 0.4-0.6 ms at every
-size. Inside `map`, the time is in handing the rule to egglog (310-340 ms at
-10 steps); saturation was 5.7 ms and extraction 0.2 ms.
+The time was egglog taking in the huge rule (310-340 ms at 10 steps);
+saturation was 5.7 ms and extraction 0.2 ms. It looked like "egglog is slow"
+and was not.
 
-The LJ equivalences share subterms too (`apart`, `inv2`, `inv6`), which is
-their ~57 ms per `get`.
+Now `side()` in `src/map.rs` names each node of a side once (via `graph()`,
+which is topological and iterative): the searched side is one `Fact::Eq` per
+node, the added side one `Action::Let` per node, then a union of the two
+roots. `dialects_in()` in `dialect.rs` walks the same way. A 40-step
+equivalence is a test (`tests/dialect.rs`).
 
-The fix, proposed to the human, who asked for discussion only: give egglog
-each distinct node of a pattern once. On the side that is searched for, one
-fact per node, bound to a variable; on the side that is added, one `let` per
-node. Same meaning, cost linear in the size of the DAG.
+After: lj tests 0.57 s -> 0.06 s; argon 2.10 -> 1.53 ms a step, same numbers.
 
-The same tree-walking is in `dialect.rs`: `written()` (so printing a dialect
-with such an equivalence is exponentially long) and `dialects_in()`.
+Still a tree walk: `written()` in `dialect.rs`, used to print a dialect and
+in the message for an equivalence within one dialect. Printing a dialect
+with a deeply shared equivalence is exponentially long. Left as is: how a
+large equivalence should be printed is the human's to say.

@@ -102,7 +102,7 @@ cargo run --example euler
 
 Kernels run on the CPU, one after the other, on values the dialects define themselves. Derivatives are not implemented: a force is written by hand, as a symbol of its own. Neither is any choice between kernels other than the shortest graph.
 
-Every `get` maps its graph from the beginning, and that takes a fixed time of some tens of milliseconds with the dialects here, whatever the size of the graph. Nothing is kept from one `get` to the next. Until something is, a program should compute many steps in one `get`.
+Every `get` maps its graph from the beginning: nothing is kept from one `get` to the next.
 
 ### Liquid argon
 

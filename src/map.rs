@@ -16,36 +16,62 @@
 //! (`unextractable`).
 
 use crate::dialect::sound;
-use crate::{applied, dialect_of, Dialect, Graph, Node, Step, ANY};
+use crate::{dialect_of, graph, Dialect, Graph, Node, Step, ANY};
 use egglog::ast::*;
 use egglog::extract::{CostModel, Extractor};
 use egglog::prelude::*;
 use egglog::{ArcSort, EGraph, Enode, Function, Term, TermDag, TermId};
 use num::BigInt;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::rc::Rc;
 
 fn table(symbol: &str, inputs: usize) -> String {
     format!("{symbol}/{inputs}")
 }
 
-/// One side of an equivalence as egglog reads it in a rule: `ANY` nodes are
-/// variables. The tables it uses and its variables are noted on the way.
-fn pattern(
-    node: Node,
-    tables: &mut BTreeMap<String, (String, usize)>,
-    variables: &mut BTreeSet<String>,
-) -> Expr {
-    let made = applied(node);
-    if made.symbol == ANY {
-        let name = format!("any{}", made.attrs);
-        variables.insert(name.clone());
-        return exprs::var(&name);
+/// One side of an equivalence as egglog reads it in a rule.
+///
+/// Each of its nodes is given a name and is there once, however many times
+/// it is used: a side written as one nested expression would repeat a node
+/// that is used twice, and all that it is made of, and so grow without
+/// bound.
+struct Side {
+    /// Each node that is a symbol: its name, and the symbol applied to the
+    /// names of its inputs. Each is after its inputs.
+    parts: Vec<(String, Expr)>,
+    /// The name of the side as a whole.
+    whole: Expr,
+    /// The names of its `ANY` nodes.
+    any: BTreeSet<String>,
+}
+
+/// A side of an equivalence, its nodes named `prefix0`, `prefix1`, … and
+/// its `ANY` nodes `any0`, `any1`, …, which are the same names on both
+/// sides. The tables it uses are noted on the way.
+fn side(node: Node, prefix: &str, tables: &mut BTreeMap<String, (String, usize)>) -> Side {
+    let steps = graph(node).steps;
+    let name = |i: usize| match steps[i].symbol == ANY {
+        true => format!("any{}", steps[i].attrs),
+        false => format!("{prefix}{i}"),
+    };
+    let mut parts = Vec::new();
+    let mut any = BTreeSet::new();
+    for (i, step) in steps.iter().enumerate() {
+        if step.symbol == ANY {
+            any.insert(name(i));
+            continue;
+        }
+        let of = table(&step.symbol, step.inputs.len());
+        tables.insert(of.clone(), (step.symbol.clone(), step.inputs.len()));
+        let mut columns = vec![exprs::string(&step.attrs)];
+        columns.extend(step.inputs.iter().map(|j| exprs::var(&name(*j))));
+        parts.push((name(i), exprs::call(&of, columns)));
     }
-    let name = table(&made.symbol, made.inputs.len());
-    tables.insert(name.clone(), (made.symbol.clone(), made.inputs.len()));
-    let mut columns = vec![exprs::string(&made.attrs)];
-    columns.extend(made.inputs.iter().map(|x| pattern(*x, tables, variables)));
-    exprs::call(&name, columns)
+    Side {
+        parts,
+        whole: exprs::var(&name(steps.len() - 1)),
+        any,
+    }
 }
 
 /// What a form costs: one for each symbol in it, counted every time it is
@@ -99,14 +125,15 @@ fn map_in(graph: &Graph, dialects: &[Dialect]) -> Result<Graph, Box<dyn std::err
     // Each equivalence, in each direction it can be read in.
     let mut rules = Vec::new();
     for (left, right) in dialects.iter().flat_map(|d| &d.equal) {
-        let (mut left_has, mut right_has) = (BTreeSet::new(), BTreeSet::new());
-        let left_reads = pattern(*left, &mut tables, &mut left_has);
-        let right_reads = pattern(*right, &mut tables, &mut right_has);
-        if applied(*left).symbol != ANY && right_has.is_subset(&left_has) {
-            rules.push((left_reads.clone(), right_reads.clone()));
+        let left = Rc::new(side(*left, "left", &mut tables));
+        let right = Rc::new(side(*right, "right", &mut tables));
+        // A side can be looked for if it is a symbol, and the other side
+        // can then be added if all it stands on was found.
+        if !left.parts.is_empty() && right.any.is_subset(&left.any) {
+            rules.push((left.clone(), right.clone()));
         }
-        if applied(*right).symbol != ANY && left_has.is_subset(&right_has) {
-            rules.push((right_reads, left_reads));
+        if !right.parts.is_empty() && left.any.is_subset(&right.any) {
+            rules.push((right, left));
         }
     }
 
@@ -137,12 +164,20 @@ fn map_in(graph: &Graph, dialects: &[Dialect]) -> Result<Graph, Box<dyn std::err
     }
     add_ruleset(&mut eg, "equal")?;
     for (from, to) in rules {
-        rule(
-            &mut eg,
-            "equal",
-            Facts(vec![Fact::Eq(span!(), exprs::var("it"), from)]),
-            GenericActions(vec![Action::Union(span!(), exprs::var("it"), to)]),
-        )?;
+        // Where every node of the one side is found, every node of the
+        // other is made, and the two sides are the same.
+        let found = from
+            .parts
+            .iter()
+            .map(|(name, made)| Fact::Eq(span!(), exprs::var(name), made.clone()))
+            .collect();
+        let mut then: Vec<Action> = to
+            .parts
+            .iter()
+            .map(|(name, made)| Action::Let(span!(), name.clone(), made.clone()))
+            .collect();
+        then.push(Action::Union(span!(), from.whole.clone(), to.whole.clone()));
+        rule(&mut eg, "equal", Facts(found), GenericActions(then))?;
     }
 
     // The graph itself, each step after its inputs.

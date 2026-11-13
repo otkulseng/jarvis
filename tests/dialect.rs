@@ -141,6 +141,31 @@ fn a_dialect_is_printed_as_what_it_holds() {
 }
 
 #[test]
+fn an_equivalence_that_uses_its_nodes_many_times_is_mapped() {
+    // Forty steps as one symbol. Each step uses the one before it twice, so
+    // written out in full its meaning would be longer than could be read.
+    let forty = |pos: Array, mass: Array, dt: Array| {
+        let mut at = pos;
+        for _ in 0..40 {
+            at = step_in_np(at, mass, dt);
+        }
+        at
+    };
+    let long = nary::Dialect::new("long")
+        .equal(|[pos, mass, dt]: [Array; 3]| {
+            (
+                nary::symbol("long.forty", [pos, mass, dt]),
+                forty(pos, mass, dt),
+            )
+        })
+        .kernel("long.forty", |x: &[&np::Value]| x[0].clone());
+    let (pos, mass) = two_arrays();
+    let plan = mapped(forty(pos, mass, np::constant(0.5)), &[np::dialect(), long]);
+    assert!(plan.contains("long.forty"), "{plan}");
+    assert_eq!(plan.lines().count(), 4, "{plan}");
+}
+
+#[test]
 fn a_hundred_steps_are_mapped_and_computed() {
     let (pos, mass) = two_arrays();
     let dt = np::constant(0.5);

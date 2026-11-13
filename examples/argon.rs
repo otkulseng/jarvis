@@ -28,8 +28,7 @@ const TEMPERATURE: f64 = 94.4; // K
 // In units of sigma, epsilon and the mass of an atom.
 const CUTOFF: f64 = 2.5;
 const DT: f64 = 0.005; // 0.0108 ps
-/// Steps between two times that Rust looks at the atoms. Mapping a graph
-/// takes about as long whatever its size, so a stretch should not be short.
+/// Steps between two times that Rust looks at the atoms.
 const STRIDE: usize = 100;
 const SETTLING: usize = 2000;
 const MEASURED: usize = 4000;
