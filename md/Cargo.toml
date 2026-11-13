@@ -1,0 +1,12 @@
+[package]
+name = "nary-md"
+version = "0.0.1"
+edition = "2021"
+
+# So that a program writes `md::euler_step`.
+[lib]
+name = "md"
+
+[dependencies]
+nary = { path = ".." }
+nary-np = { path = "../np" }

@@ -1,0 +1,11 @@
+[package]
+name = "nary-np"
+version = "0.0.1"
+edition = "2021"
+
+# So that a program writes `np::add`, `np::random::uniform`.
+[lib]
+name = "np"
+
+[dependencies]
+nary = { path = ".." }

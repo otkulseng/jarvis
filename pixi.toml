@@ -3,14 +3,4 @@ name = "nary"
 channels = ["conda-forge"]
 platforms = ["linux-aarch64", "linux-64", "osx-arm64"]
 
-
-[activation.env]
-CARGO_TARGET_DIR = "$HOME/.cache/nary/target"
-CUBECL_WGPU_DEFAULT_DEVICE = "Cpu"
-
 [tasks]
-fresh = "find src mlip/src examples tests -name '*.rs' -exec touch {} +"
-test = { cmd = "cargo test --tests", depends-on = ["fresh"] }
-cpu = { cmd = "cargo run -q --example main", env = { NARY_BACKEND = "cpu" }, depends-on = ["fresh"] }
-stablehlo = { cmd = "cargo run -q --example main", env = { NARY_BACKEND = "stablehlo" }, depends-on = ["fresh"] }
-cubecl = { cmd = "cargo run -q --example main", env = { NARY_BACKEND = "cubecl" }, depends-on = ["fresh"] }

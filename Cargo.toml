@@ -4,15 +4,16 @@ version = "0.0.1"
 edition = "2021"
 
 [workspace]
-members = ["mlip"]
+members = ["np", "md"]
 
 [dependencies]
 egglog = "3.0.0"
-pjrt = "0.2.0"
+# The same numbers egglog counts with, for costs that never run out.
+num = "0.4.3"
 
 [dev-dependencies]
-nary-mlip = { path = "mlip" }
+nary-np = { path = "np" }
+nary-md = { path = "md" }
 
 [profile.dev]
 opt-level = 1
-

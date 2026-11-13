@@ -1,8 +1,0 @@
-[package]
-name = "nary-mlip"
-version = "0.0.1"
-edition = "2021"
-
-[dependencies]
-nary = { path = ".." }
-cubecl = { version = "0.11.3", features = ["wgpu-spirv"] }
