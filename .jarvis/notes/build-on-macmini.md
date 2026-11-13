@@ -1,12 +1,8 @@
-# Building on the macmini kernel (2026-11-13)
+# Building and checking (macmini, 2026-11-13)
 
-- `pixi run test` does not build here: the system toolchain is rustc/cargo
-  1.93.0, and cubecl 0.11.3 (pulled in by `mlip`, a dev-dependency of nary)
-  needs rustc 1.95. pixi.toml declares no dependencies, so pixi uses whatever
-  cargo is on PATH.
-- No PJRT plugin at `.pjrt/libpjrt_cpu.so`, so the StableHLO path cannot run.
-- README refers to `DESIGN.md`, which is not in the repository.
+- Check with `cargo test --workspace` and `cargo run -q --example md`. Both
+  pass with the system Rust 1.93.0 since the rewrite (cubecl and pjrt are
+  gone; the only dependencies are egglog 3 and num).
+- pixi.toml has no tasks any more: `pixi run test` fails. Use cargo directly.
 - Allowed commands are only `cargo` and `pixi` (.jarvis/claude.json); compound
-  shell commands and `rustup` are refused.
-- Open question put to the human: pin Rust in pixi.toml (`rust >= 1.95` from
-  conda-forge) or update the system toolchain.
+  shell commands with pipes or `;` are refused, so run one command per call.
