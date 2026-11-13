@@ -43,5 +43,12 @@ meant to show an example"): they are now a dialect `toy` inside
 argon example runs at 2.1 ms a step. The lesson stands: the fixed cost of
 `map` grows with the size of the equivalences in the dialects given.
 
+Measured inside `map` (euler example, release, 403-step graph, rule of 40
+symbols): handing the rules to egglog (`rule(...)`) 310-340 ms; adding the
+graph 4.5 ms; saturation 5.7 ms; extraction 0.2 ms. So the time is egglog
+taking in a large rule, not equality saturation and not building the
+`Dialect`. Why egglog is slow at that (it grows faster than the rule's size)
+has not been looked into.
+
 Not done: pressure (needs the virial, another symbol), a kernel for a whole
 Verlet step (needs a symbol with several results), units other than reduced.
