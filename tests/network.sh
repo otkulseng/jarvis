@@ -111,6 +111,17 @@ until_ok 20 answered
 sent_done() { on a messages asker@a --json | has "all(m['status']=='handled' for m in x if m['body']=='hello')"; }
 until_ok 20 sent_done
 
+step="a model for its turns"
+# The tag is handed to its agent, which says in its turn what it was asked for.
+on a tag asker@a model=small > /dev/null
+as asker@a send answerer@c "with a model" > /dev/null
+ran_on() { on a log asker@a --json -n 200 | has "[r['data'].get('model') for r in x if r['kind']=='turn'][-1] == $1"; }
+until_ok 20 ran_on "'small'"
+on a tag asker@a model= > /dev/null
+as asker@a send answerer@c "without one" > /dev/null
+until_ok 20 ran_on "None"
+echo "a process's tag said which model its turns run on, and stopped saying so when it was removed"
+
 step="following every kernel from a"
 on a watch --all > "$work/watch.jsonl" 2>&1 &
 watcher=$!
@@ -132,7 +143,7 @@ for i in $(seq 1 40); do
 done
 wait $killer
 all_answered() {
-    [ "$(on a messages asker@a --json -n 5000 | count "m['body'].startswith('ack ') and m['to']=='asker@a' and m['status']=='handled'")" -ge 41 ]
+    [ "$(on a messages asker@a --json -n 5000 | count "m['body'].startswith('ack ') and m['to']=='asker@a' and m['status']=='handled'")" -ge 43 ]
 }
 until_ok 90 all_answered
 on c log @c --json -n 5000 > "$work/c.json"
@@ -208,7 +219,7 @@ until_ok 20 direct
 down b TERM
 sleep 1
 as asker@a send answerer@c "the direct way" > /dev/null
-direct_answered() { on a messages asker@a --json -n 5000 | has "sum(1 for m in x if m['body'].startswith('ack ') and m['status']=='handled') >= 42"; }
+direct_answered() { on a messages asker@a --json -n 5000 | has "sum(1 for m in x if m['body'].startswith('ack ') and m['status']=='handled') >= 44"; }
 until_ok 30 direct_answered
 echo "with b gone, a and c talk over a link of their own"
 

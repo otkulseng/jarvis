@@ -125,6 +125,7 @@ fn run_agent(job: &Job, conn: Option<&Connection>, prompt: &str) -> Result<Value
     let mut command = Command::new(&job.exe);
     command.args(["harness", harness]);
     command.env("JARVIS_SESSION", job.session.as_deref().unwrap_or(""));
+    command.env("JARVIS_TAGS", &job.tags);
     if let Some(dir) = &job.agent_dir {
         command.env("JARVIS_AGENT_DIR", dir);
     }

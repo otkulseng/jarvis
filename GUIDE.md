@@ -250,6 +250,12 @@ you and the others agree they mean. They are how the human, and you, find and
 group processes: by project, by place, by anything. When you take on work for
 a project, or create a process for one, tag it.
 
+One tag is read by jarvis's agents: `model`. `jarvis tag NAME@KERNEL
+model=opus` makes that process's turns run on that model from its next turn
+on, with everything it remembers. Use it, on yourself or on others, to put
+simple work on a cheaper model and hard work on a stronger one. The first turn
+after a change costs more than usual, so do not switch back and forth.
+
 ## Working well
 
 - When something is not as you expected, stop and say so plainly to whoever is

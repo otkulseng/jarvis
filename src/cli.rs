@@ -316,6 +316,11 @@ pub enum Cmd {
         meaning. They are for people, processes and programs to find and group \
         processes by. Every process also counts as tagged `kernel=` with the kernel \
         it is on.\n\n\
+        One tag is read by a process's agent: `model=` says which model its turns run \
+        on, from its next turn. What it remembers stays: the same context is read by \
+        another model. The names are the agent's own (for Claude: `opus`, `sonnet`, \
+        `haiku`, `fable`, or a full model name). Without the tag, the model is the one \
+        in the process's own settings (`.jarvis/claude.json`), or else the agent's default.\n\n\
         Anyone may tag any process. `NAME=` with nothing after it removes that tag. \
         Without any tags given, the process's tags are printed."
     )]
@@ -323,6 +328,7 @@ pub enum Cmd {
         \x20 jarvis tag lammps1@laptop project=moe\n\
         \x20 jarvis tag lammps1@laptop \"place=cluster one\" role=lead\n\
         \x20 jarvis tag lammps1@laptop role=            remove the tag `role`\n\
+        \x20 jarvis tag lammps1@laptop model=opus       its turns run on that model from now on\n\
         \x20 jarvis tag lammps1@laptop                  print its tags")]
     Tag(Tag),
 

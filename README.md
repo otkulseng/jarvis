@@ -52,6 +52,9 @@ there is and how to use it.
   the tools its own work needs (`npm`, `cargo`, `sbatch`) in
   `.jarvis/claude.json` in its directory, which is part of its expert. A
   process can also have no agent (`--harness none`): then its code is all.
+  Which model an agent's turns run on is a tag (`jarvis tag NAME@KERNEL
+  model=opus`), so it can be changed at any time, by anyone, and the agent
+  keeps what it remembers.
   The top of `src/harness.rs` says what the kernel gives an adapter and what
   it must print: that is all another kind of agent has to do.
 - **The page** is not here. It is an expert, the branch `page`: an Axum

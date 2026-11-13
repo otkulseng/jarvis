@@ -415,6 +415,8 @@ struct Job {
     harness: Option<String>,
     /// This program, which is run once more as the adapter for that agent.
     exe: PathBuf,
+    /// The process's tags, as a JSON object: the adapter may read some.
+    tags: String,
     /// Where that adapter keeps what must last between turns.
     agent_dir: Option<PathBuf>,
     session: Option<String>,

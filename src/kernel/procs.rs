@@ -250,6 +250,15 @@ impl Kernel {
         let began = self.rec(&proc.addr, "turn_start", json!({"messages": ids}))?;
 
         let agent_dir = self.cfg.agent_dir(&proc.harness, &proc.addr);
+        let tags: serde_json::Map<String, Value> = {
+            let mut stmt = self
+                .db
+                .prepare_cached("SELECT key, value FROM tags WHERE addr = ?1")?;
+            stmt.query_map([&proc.addr], |r| {
+                Ok((r.get::<_, String>(0)?, Value::String(r.get(1)?)))
+            })?
+            .collect::<Result<_, _>>()?
+        };
         if let Some(dir) = &agent_dir {
             // In a store inside the repository, it is not code either.
             hide_from_git(&self.cfg.repo, &[dir]);
@@ -263,6 +272,7 @@ impl Kernel {
             db_path: self.cfg.db_path(),
             harness: self.cfg.harness(&proc.harness),
             exe: self.cfg.exe.clone(),
+            tags: Value::Object(tags).to_string(),
             agent_dir,
             session: proc.session.clone(),
             env: self.proc_env(name),

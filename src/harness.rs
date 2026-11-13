@@ -15,6 +15,9 @@
 //!                              is the same on every machine that uses the store,
 //!                              and it is deleted when the process is removed
 //!        $JARVIS_GUIDE         path to the guide every agent is given
+//!        $JARVIS_TAGS          the process's tags, as a JSON object. One is read
+//!                              by every adapter: `model`, the model this turn is
+//!                              to run on, in whatever names its agent takes
 //!   out  standard output       JSON objects, one per line.
 //!                              While the agent works, one line per step, which
 //!                              the kernel records at once (`jarvis log --steps`):
@@ -24,6 +27,7 @@
 //!                              Then, as the last line, how the turn ended:
 //!                                {"session": id to continue next time,
 //!                                 "reply":   what the agent said last,
+//!                                 "model":   the model its tag asked for, or null,
 //!                                 "cost_usd": what this turn cost, if known; or
 //!                                 "cost_usd_session": what the whole session has
 //!                                            cost so far, from which the kernel
@@ -68,6 +72,17 @@ pub fn run(name: &str) -> i32 {
 
 fn given(name: &str) -> Result<String, String> {
     std::env::var(name).map_err(|_| format!("${name} is not set. `jarvis harness` is run by a kernel, for a turn of one of its processes"))
+}
+
+/// The model the process's tag `model` asks for, if it has one.
+fn model_asked() -> Option<String> {
+    let tags: Value =
+        serde_json::from_str(&std::env::var("JARVIS_TAGS").unwrap_or_default()).unwrap_or_default();
+    tags["model"]
+        .as_str()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .map(str::to_string)
 }
 
 fn emit(value: Value) {
@@ -326,6 +341,8 @@ struct Ran {
     failed: bool,
     result: Option<Value>,
     said: String,
+    /// The models that spoke as the agent itself, in the order they first did.
+    models: Vec<String>,
 }
 
 impl Ran {
@@ -345,6 +362,7 @@ fn claude_once(
     which: &[&str],
     guide: &str,
     settings: Option<&str>,
+    model: Option<&str>,
     keep_in: &Path,
 ) -> Result<Ran, String> {
     let mut command = Command::new("claude");
@@ -365,6 +383,10 @@ fn claude_once(
         Ok(flags) => command.args(words(&flags)),
         Err(_) => command.args(DEFAULT_FLAGS),
     };
+    // Last, so that it is this that counts.
+    if let Some(model) = model {
+        command.args(["--model", model]);
+    }
     let mut child = command
         .env("CLAUDE_CONFIG_DIR", keep_in)
         .stdin(Stdio::piped())
@@ -385,13 +407,25 @@ fn claude_once(
         let _ = stderr.read_to_string(&mut all);
         all
     });
-    let (mut result, mut other) = (None, String::new());
+    let (mut result, mut other, mut models) = (None, String::new(), Vec::new());
     for line in BufReader::new(child.stdout.take().expect("stdout is piped")).split(b'\n') {
         let Ok(line) = line else { break };
         let line = String::from_utf8_lossy(&line);
         match serde_json::from_str::<Value>(&line) {
             Ok(event) if event["type"] == "result" => result = Some(event),
-            Ok(event) if event.is_object() => steps(&event).into_iter().for_each(emit),
+            Ok(event) if event.is_object() => {
+                // Which model this was, unless it was a helper the agent started.
+                if let Some(model) = event["message"]["model"].as_str()
+                    && event["type"] == "assistant"
+                    && event["parent_tool_use_id"]
+                        .as_str()
+                        .is_none_or(str::is_empty)
+                    && !models.iter().any(|m| m == model)
+                {
+                    models.push(model.to_string());
+                }
+                steps(&event).into_iter().for_each(emit)
+            }
             _ => {
                 other.push_str(&line);
                 other.push('\n');
@@ -407,6 +441,7 @@ fn claude_once(
         failed: !status.success(),
         result,
         said,
+        models,
     })
 }
 
@@ -439,12 +474,14 @@ fn claude() -> Result<(), String> {
     guide.push_str(&crate::cli::overview());
 
     let (settings, notice) = own_settings();
+    let model = model_asked();
     let prompt = format!("{notice}{prompt}");
     let mut ran = claude_once(
         &prompt,
         &["--resume", &session],
         &guide,
         settings.as_deref(),
+        model.as_deref(),
         &keep_in,
     )?;
     let mut session_lost = false;
@@ -464,6 +501,7 @@ fn claude() -> Result<(), String> {
             &["--session-id", &session, "--name", &address],
             &guide,
             settings.as_deref(),
+            model.as_deref(),
             &keep_in,
         )?;
     }
@@ -488,6 +526,13 @@ fn claude() -> Result<(), String> {
             if problem.contains("Not logged in") {
                 problem = format!("{NOT_LOGGED_IN}\n{problem}");
             }
+            if let Some(model) = model.filter(|_| problem.to_lowercase().contains("model")) {
+                problem = format!(
+                    "Its tag `model` asks for `{model}`. If that is not a model Claude Code knows, \
+                     set another with `jarvis tag {address} model=NAME`, or remove the tag with \
+                     `jarvis tag {address} model=`.\n{problem}"
+                );
+            }
             return Err(if problem.trim().is_empty() {
                 "claude produced no output".into()
             } else {
@@ -500,6 +545,9 @@ fn claude() -> Result<(), String> {
         "session": out["session_id"],
         "reply": out["result"].as_str().unwrap_or(""),
         "harness": "claude",
+        "model": model,
+        // The models that did answer, as Claude Code named them.
+        "models": ran.models,
         // Claude Code reports what the session has cost in all, not this turn.
         "cost_usd_session": out["total_cost_usd"],
         "duration_ms": out["duration_ms"],
@@ -550,7 +598,9 @@ fn echo() -> Result<(), String> {
             .args(["send", sender, &format!("ack {message}")])
             .output();
     }
-    emit(json!({"session": "s", "reply": "Answered what was due.", "cost_usd": 0.0}));
+    emit(
+        json!({"session": "s", "reply": "Answered what was due.", "cost_usd": 0.0, "model": model_asked()}),
+    );
     Ok(())
 }
 
