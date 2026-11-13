@@ -1,6 +1,5 @@
 target/
 .pixi/
-.pjrt/
 # mirflow: the database and what `get` brings back. Its store `.mirflow/` ignores itself.
 /mirflow.sqlite
 /mirflow.sqlite-journal

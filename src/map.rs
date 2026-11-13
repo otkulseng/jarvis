@@ -4,6 +4,11 @@
 //! every form the graph is equal to. Then one form is picked in which every
 //! symbol has a kernel: the one with the fewest.
 //!
+//! This is all egglog is used for. It does not simplify or optimize the
+//! graph. It shows that a form with a kernel for every symbol exists, and it
+//! holds what each node is equal to, which is what a derivative will be
+//! taken through. "The fewest symbols" is only the choice made for now.
+//!
 //! In egglog, a symbol with `n` inputs is a table `name/n` with the columns
 //! (attributes, input, …, input) → node. An equivalence is a rule for each
 //! direction it can be read in. Kernels are not in egglog. A symbol without

@@ -16,6 +16,9 @@
 //! graph is equal to and to pick one made of symbols that have kernels. To
 //! **run** a mapped graph is to call those kernels, each after its inputs.
 //!
+//! nary is not a compiler. It does not optimize or generate code: all code
+//! that computes is in kernels, and nary only maps a graph onto them.
+//!
 //! No dialect is special. A dialect of arrays (`np/`) and a dialect with
 //! one symbol for a whole simulation step are the same kind of thing.
 //!

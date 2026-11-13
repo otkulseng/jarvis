@@ -36,12 +36,11 @@ Example: `examples/md.rs` (100 np steps map to 10 `md.euler_10_steps`).
 
 ## Things noticed, not yet acted on
 
-- README's "Current prototype" section is stale: it speaks of StableHLO, PJRT,
-  CubeCL, `examples/main.rs`, `DESIGN.md` and `pixi run cpu|stablehlo|cubecl|test`,
-  none of which exist now.
+- README was rewritten on 2026-11-13 to match the code and `not-a-compiler.md`.
+  `pixi.toml` (no tasks) and `pixi.lock` are leftovers, as are the `mirflow`
+  lines in `.gitignore`; the human has not said whether to keep them.
 - np kernels `expect`/index on malformed attrs or mismatched shapes (panic),
   while nary itself promises not to panic. The kernel signature returns `V`,
   so a kernel has no way to report an error.
 - Extraction cost is "fewest symbols". That is intended for now: see
   `not-a-compiler.md`. Saturation has no limit on iterations.
-- np/src/lib.rs says the kernels are in `kernels.rs`; they are in `kernels/`.

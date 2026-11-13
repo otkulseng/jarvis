@@ -2,7 +2,7 @@
 //!
 //! This file is all of np that a program uses: an array, the operations on
 //! arrays, the dialect, and `get`. The code that computes them is in
-//! `kernels.rs`.
+//! `kernels/`.
 
 mod kernels;
 pub mod random;
