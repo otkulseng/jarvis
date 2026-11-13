@@ -93,6 +93,9 @@ fn run_agent(job: &Job, conn: Option<&Connection>, prompt: &str) -> Result<Value
     }
     let mut command = Command::new(harness);
     command.env("JARVIS_SESSION", job.session.as_deref().unwrap_or(""));
+    if let Some(dir) = &job.agent_dir {
+        command.env("JARVIS_AGENT_DIR", dir);
+    }
     // What the agent does is noted while it does it.
     let mut step = |line: &str| match serde_json::from_str::<Value>(line) {
         Ok(value) if value.get("step").is_some() => {

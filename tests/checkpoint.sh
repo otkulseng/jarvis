@@ -10,6 +10,8 @@
 #     number it may have given out before;
 #   - a kernel that is stopped has saved everything;
 #   - whatever is left in scratch is not looked at;
+#   - what an agent keeps between turns is in the store, found again after
+#     the kernel was lost, and gone when its process is removed;
 #   - without scratch there is one database, in the store, and nothing is
 #     copied.
 #
@@ -23,7 +25,8 @@ work=$(mktemp -d /tmp/jv-XXXXXX)
 export JARVIS_RUN="$work/run" PATH="$here/target/debug:$PATH"
 export JARVIS_STORE="$work/store" JARVIS_CHECKPOINT_SECONDS=0.5
 unset JARVIS_KERNEL JARVIS_ID JARVIS_SCRATCH || true
-mkdir -p "$work/run" "$work/repo"
+mkdir -p "$work/run" "$work/repo/harness"
+cp "$here/tests/harness/echo" "$work/repo/harness/echo"
 cd "$work/repo"
 git init -q -b main .
 mkdir .jarvis
@@ -60,6 +63,9 @@ db = sqlite3.connect('file:$JARVIS_STORE/kernel/$1/kernel.db?mode=ro', uri=True)
 sys.exit(0 if db.execute('select count(*) from messages where body = ?', (sys.argv[1],)).fetchone()[0] else 1)" "$2"; }
 restored() { on "$1" log --json -n 100000 | python3 -c "import json,sys; print(len([f for f in json.load(sys.stdin) if f['kind']=='restored']))"; }
 number_of() { python3 -c "import json,sys; print(json.load(sys.stdin)['id'].split(':')[1])"; }
+# What the test harness keeps for its agent: how many turns it has had.
+kept_turns() { cat "$JARVIS_STORE/echo/$1/turns"; }
+more_turns_than() { [ "$(kept_turns "$1")" -gt "$2" ]; }
 
 step="a kernel with scratch is in the store from its first moment"
 export JARVIS_SCRATCH="$work/scratch"
@@ -69,10 +75,13 @@ until_ok 20 on c kernels
 [ -f "$JARVIS_SCRATCH/kernel/c/kernel.db" ]
 [ "$(on c spawn probe@c --from main --harness none)" = "probe@c" ]
 [ -d "$JARVIS_STORE/kernel/c/proc/probe" ]
+[ "$(on c spawn agent@c --harness echo --prompt 'A test process.')" = "agent@c" ]
+until_ok 20 more_turns_than agent@c 0
+[ ! -e "$JARVIS_SCRATCH/echo" ]
 before=$(on c send --json probe@c "ping one" | number_of)
 until_ok 20 answered c "ping one"
 until_ok 20 in_store c "probe got: ping one"
-echo "the kernel works in scratch; its database and its process's code are in the store"
+echo "the kernel works in scratch; its database, its processes' code and what an agent keeps are in the store"
 
 step="killed, scratch gone: it starts from the store"
 down c KILL
@@ -80,13 +89,22 @@ until_ok 10 gone c
 rm -rf "$JARVIS_SCRATCH"
 up c
 until_ok 20 on c kernels
-on c ps --json | has "[p['id'] for p in x] == ['probe@c']"
+on c ps --json | has "{p['id'] for p in x} == {'probe@c', 'agent@c'}"
+had=$(kept_turns agent@c)
+on c send agent@c "hello again" > /dev/null
+until_ok 20 more_turns_than agent@c "$had"
 answered c "ping one"
 [ "$(restored c)" = 1 ]
 after=$(on c send --json probe@c "ping two" | number_of)
 [ "$after" -gt $((before + 1000000)) ]
 until_ok 20 answered c "ping two"
-echo "it came back with its process and what was said, and numbers on from $after (it was at $before)"
+echo "it came back with its processes and what was said, and numbers on from $after (it was at $before)"
+echo "its agent found what it had kept, and carried on from turn $had"
+
+step="a removed process: what its agent kept goes with it"
+on c remove agent@c > /dev/null
+[ ! -e "$JARVIS_STORE/echo/agent@c" ]
+echo "removed, and nothing of its agent is left in the store"
 
 step="stopped: everything is saved, and what is left in scratch is not looked at"
 down c TERM

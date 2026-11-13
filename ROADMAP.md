@@ -36,7 +36,8 @@ runtime is all that is needed.
 ## Part 2: The store (built, except as said below)
 
 **What it is.** `JARVIS_STORE` is the memory of the system. It holds the
-database of every kernel that has run, and the code of its processes. A
+database of every kernel that has run, the code of its processes, and what
+their agents remember from turn to turn (found by address alone). A
 kernel has one database, the one in the store, and always starts from it.
 This is never optional: it is also where the data is when a run is over.
 
@@ -49,19 +50,13 @@ set, and the kernel works in the store directly.
 **What may be lost.** A kernel with scratch that is killed loses what it did
 after its last save. That is accepted: messages are carried by flux and the
 like and need not outlive everything, the agents' work is in git, and their
-conversations are kept (below).
+conversations are in the store.
 
 **It is not how kernels learn about each other.** The runtime never reads
 another kernel's database to answer a question.
 
 **Not built yet:**
 
-- **The agents' conversations in the store** (`JARVIS_STORE/claude`), so that
-  `name@kernel` carries on with its context when its kernel starts on another
-  machine. Claude Code can keep everything it has in a chosen directory, but
-  its login moves with it, so this needs a login by token in the kernel's
-  environment (`claude setup-token`). The session's id can be computed from
-  the address.
 - **Reading a kernel that is not running.** Its database is in the store, and
   no command reads it there.
 - **One kernel name in two places.** Nothing stops a kernel being started on

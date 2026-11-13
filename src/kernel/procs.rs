@@ -192,6 +192,11 @@ impl Kernel {
         // From this record on the mail is handed out: all of it, or none of it.
         let began = self.rec(&proc.addr, "turn_start", json!({"messages": ids}))?;
 
+        let agent_dir = self.cfg.agent_dir(&proc.harness, &proc.addr);
+        if let Some(dir) = &agent_dir {
+            // In a store inside the repository, it is not code either.
+            hide_from_git(&self.cfg.repo, &[dir]);
+        }
         let cancel = Arc::new(AtomicBool::new(false));
         let job = Job {
             name: name.to_string(),
@@ -200,6 +205,7 @@ impl Kernel {
             dir: dir.to_path_buf(),
             db_path: self.cfg.db_path(),
             harness: self.cfg.harness(&proc.harness),
+            agent_dir,
             session: proc.session.clone(),
             env: self.proc_env(name),
             mail,
@@ -638,6 +644,17 @@ impl Kernel {
                 repo.git(&["branch", "-D", &proc.branch])?;
             }
             let _ = fs::remove_file(self.cfg.run_log(name));
+            // What its agent remembered goes with it: a process made later
+            // under this address is a new one.
+            let mut notes = Vec::new();
+            if let Some(kept) = self.cfg.agent_dir(&proc.harness, &addr).filter(|d| d.exists())
+                && let Err(e) = fs::remove_dir_all(&kept)
+            {
+                notes.push(format!(
+                    "what the agent of {addr} remembered could not be deleted ({e}). Delete {} by hand, or a process made again as {addr} will remember it",
+                    kept.display()
+                ));
+            }
             self.rec(&addr, "remove", json!({"by": removal.by, "commit": commit, "branch_kept": removal.keep_branch, "turns": turns, "cost_usd": cost}))?;
             for id in unread {
                 self.receipt(&id, "dropped", json!({}));
@@ -650,7 +667,7 @@ impl Kernel {
                     }
                     (None, _) => format!("removed {addr}"),
                 }],
-                vec![],
+                notes,
             ))
         })();
         let _ = removal.reply.send(done.map_err(|e| e.to_string()));

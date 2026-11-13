@@ -6,7 +6,12 @@ the same for every harness, so the kernel knows nothing about any of them:
 
   in   standard input        the prompt (the process's new messages)
        working directory     the process's own directory
-       $JARVIS_SESSION       the session to continue, or empty for a new one
+       $JARVIS_SESSION       the session its last turn ended with, or empty
+       $JARVIS_AGENT_DIR     a directory of this process's own, in the store,
+                             for what its agent must have again next turn. It
+                             is the same on every machine that uses the store,
+                             and it is deleted when the process is removed
+       $JARVIS_ID            the process's address
        $JARVIS_GUIDE         path to the guide every agent is given
        `jarvis` on $PATH     the command; `jarvis help` describes it
   out  standard output       JSON objects, one per line.
@@ -31,6 +36,14 @@ the same for every harness, so the kernel knows nothing about any of them:
 To support another harness, add another executable next to this one and
 spawn processes with `--harness <its name>`.
 
+What this adapter keeps. Claude Code is given $JARVIS_AGENT_DIR as its whole
+configuration directory, so the agent's session is a file there and nowhere
+else. The session's id is worked out from the process's address, so the
+address alone finds it: each turn continues that session, and makes it if it
+is not there. Nothing of the machine's own `~/.claude` is used, the login
+included: the kernel must have been started with $CLAUDE_CODE_OAUTH_TOKEN
+set, to a token made by `claude setup-token`.
+
 What the agent may do is decided in two places.
 
   Every agent     the flags below: edit files in its own directory, use the
@@ -54,6 +67,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import uuid
 
 # The most of a tool's input or output that is recorded for one step.
 MOST = 4000
@@ -64,6 +78,17 @@ DEFAULT_FLAGS = [
     "Bash(jarvis:*)", "Bash(git:*)", "Bash(ls:*)", "Bash(cat:*)",
     "Read", "Edit", "Write", "Glob", "Grep", "WebSearch", "WebFetch",
 ]
+
+NOT_LOGGED_IN = (
+    "Claude is not logged in. An agent's sessions are kept in the store, and "
+    "the login of this machine is not there, so the kernel must be started "
+    "with CLAUDE_CODE_OAUTH_TOKEN set to a token made by `claude setup-token`. "
+    "Stop the kernel and start it again from a shell that has it."
+)
+
+# Claude Code deletes sessions that were not used for this many days. It has
+# no way to say never, so: a hundred years.
+KEEP_DAYS = 36500
 
 LOST = (
     "[jarvis] Your earlier session could not be continued, so you remember "
@@ -164,14 +189,24 @@ def steps(event):
             }
 
 
-def claude(prompt, session, guide, settings):
+def keep_in(directory):
+    """Have Claude Code keep everything in this directory, and keep it for good."""
+    os.makedirs(directory, exist_ok=True)
+    os.environ["CLAUDE_CONFIG_DIR"] = directory
+    settings = os.path.join(directory, "settings.json")
+    if not os.path.exists(settings):
+        with open(settings, "w") as f:
+            json.dump({"cleanupPeriodDays": KEEP_DAYS}, f)
+
+
+def claude(prompt, which, guide, settings):
     """Run one turn, printing its steps as they happen.
 
+    `which` are the flags that say which session: continue one, or make one.
     Returns (exit code, the final result Claude Code reported or None, and
     everything else it printed, for error messages)."""
     command = ["claude", "-p", "--output-format", "stream-json", "--verbose", "--append-system-prompt", guide]
-    if session:
-        command += ["--resume", session]
+    command += which
     if settings:
         command += ["--settings", settings]
     flags = os.environ.get("JARVIS_CLAUDE_FLAGS")
@@ -209,7 +244,10 @@ def claude(prompt, session, guide, settings):
 
 def main():
     prompt = sys.stdin.read()
-    session = os.environ.get("JARVIS_SESSION") or None
+    address = os.environ["JARVIS_ID"]
+    keep_in(os.environ["JARVIS_AGENT_DIR"])
+    # The same address always gives the same session.
+    session = str(uuid.uuid5(uuid.NAMESPACE_URL, "jarvis:" + address))
     with open(os.environ["JARVIS_GUIDE"]) as f:
         guide = f.read()
     # The agent is also shown what `jarvis help` prints, so that the command
@@ -220,16 +258,22 @@ def main():
 
     settings, notice = own_settings()
     prompt = notice + prompt
-    code, out, said = claude(prompt, session, guide, settings)
+    code, out, said = claude(prompt, ["--resume", session], guide, settings)
     session_lost = False
-    if session and code != 0 and "No conversation found" in said + json.dumps(out or {}):
-        session_lost = True
-        code, out, said = claude(LOST + prompt, None, guide, settings)
+    if code != 0 and "No conversation found" in said + json.dumps(out or {}):
+        # There is none yet. If the kernel knows of an earlier turn, there
+        # was one, and it is gone.
+        session_lost = bool(os.environ.get("JARVIS_SESSION"))
+        code, out, said = claude(
+            (LOST if session_lost else "") + prompt, ["--session-id", session, "--name", address], guide, settings
+        )
 
     if code != 0 or out is None or out.get("is_error"):
         problem = said.strip()
         if out and out.get("is_error"):
             problem = f"{out.get('result') or json.dumps(out)}\n{problem}"
+        if "Not logged in" in problem:
+            problem = f"{NOT_LOGGED_IN}\n{problem}"
         sys.stderr.write(problem or "claude produced no output\n")
         sys.exit(code or 1)
 

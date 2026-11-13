@@ -92,7 +92,12 @@ pub enum Cmd {
         \x20 the store        what lasts: $JARVIS_STORE, or `.jarvis` in the repository.\n\
         \x20                  Each kernel has its database there (`kernel/NAME/kernel.db`:\n\
         \x20                  the only one there is, and what a kernel starts from) and\n\
-        \x20                  its processes' directories (`kernel/NAME/proc/`).\n\
+        \x20                  its processes' directories (`kernel/NAME/proc/`). What an\n\
+        \x20                  agent remembers from turn to turn is there too, by its\n\
+        \x20                  address (`claude/NAME@KERNEL/`).\n\
+        \x20 the login        a Claude agent keeps nothing on the machine, the login\n\
+        \x20                  included: start the kernel with $CLAUDE_CODE_OAUTH_TOKEN set\n\
+        \x20                  to a token made by `claude setup-token`.\n\
         \x20 scratch          $JARVIS_SCRATCH, if set: a directory on the machine's own\n\
         \x20                  disk, which may vanish. The kernel then works on a copy of\n\
         \x20                  its database there and saves it to the store when something\n\
@@ -263,7 +268,8 @@ pub enum Cmd {
     /// Take a process off its kernel: its directory and branch go, what was written down stays
     #[command(long_about = "Take a process off its kernel: its directory and branch go, what was written down stays.\n\n\
         What it is doing is ended first, as with `jarvis stop`. Then its directory \
-        and its branch are deleted. Everything that was written down about it stays: \
+        and its branch are deleted, and so is what its agent remembered from turn to \
+        turn. Everything that was written down about it stays: \
         its messages and what it did can still be read. Mail that was waiting for it \
         is marked as dropped. Afterwards the name is free on that kernel.\n\n\
         Work it landed on an expert's branch is not touched. Work it had not landed \

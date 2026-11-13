@@ -4,6 +4,13 @@
 import json, os, re, subprocess, sys
 
 prompt = sys.stdin.read()
+# What it keeps between turns is in the directory it is given for that: here,
+# how many turns it has had.
+kept = os.path.join(os.environ["JARVIS_AGENT_DIR"], "turns")
+os.makedirs(os.path.dirname(kept), exist_ok=True)
+turns = int(open(kept).read()) if os.path.exists(kept) else 0
+with open(kept, "w") as f:
+    f.write(str(turns + 1))
 print(json.dumps({"step": "text", "text": "Reading my messages."}), flush=True)
 for found in re.finditer(r"--- message (\S+) from (\S+) ---\n(.*)", prompt):
     message, sender, first = found.groups()

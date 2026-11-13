@@ -91,6 +91,8 @@ pub struct Config {
     pub name: String,
     pub identity: String,
     pub repo: Repo,
+    /// The store: what lasts, for every kernel that uses it.
+    pub store: PathBuf,
     /// The kernel's directory in the store: its database as it lasts, and
     /// its processes' directories.
     pub state: PathBuf,
@@ -133,6 +135,14 @@ impl Config {
     /// The adapter that runs a process's agent; none for a process without one.
     fn harness(&self, name: &str) -> Option<PathBuf> {
         (name != NO_AGENT).then(|| self.repo.root.join("harness").join(name))
+    }
+
+    /// Where a harness keeps what the agent of a process must have again at
+    /// its next turn (its sessions): a directory in the store, named by the
+    /// harness and the process's address, so that it is found from any
+    /// machine and by nothing but the name. It goes when the process does.
+    fn agent_dir(&self, harness: &str, addr: &str) -> Option<PathBuf> {
+        (harness != NO_AGENT).then(|| self.store.join(harness).join(addr))
     }
 }
 
@@ -324,6 +334,8 @@ struct Job {
     db_path: PathBuf,
     /// The adapter that runs its agent; none if it has no agent.
     harness: Option<PathBuf>,
+    /// Where that adapter keeps what must last between turns.
+    agent_dir: Option<PathBuf>,
     session: Option<String>,
     env: Vec<(String, String)>,
     mail: Vec<Mail>,
@@ -552,6 +564,7 @@ pub fn up(args: cli::Up) -> Res<()> {
         name: name.clone(),
         identity,
         repo,
+        store,
         state,
         work,
         run_dir,

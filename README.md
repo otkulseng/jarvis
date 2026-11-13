@@ -50,6 +50,8 @@ there is and how to use it.
   the tools its own work needs (`npm`, `cargo`, `sbatch`) in
   `.jarvis/claude.json` in its directory, which is part of its expert. A
   process can also have no agent (`--harness none`): then its code is all.
+  The top of `harness/claude` says what the kernel gives an adapter and what
+  it must print: that is all another harness has to do.
 - **The page** is not here. It is an expert, the branch `page`: an Axum
   server with a Svelte and TypeScript page. Nothing on `main` knows about it.
 
@@ -117,6 +119,10 @@ Where things are kept (`jarvis help up`):
 **The store is the memory of the system.** For every kernel that has run it
 holds `kernel/NAME/kernel.db`, the kernel's database, and `kernel/NAME/proc/`,
 its processes' directories (their code, each a git checkout with one writer).
+What an agent remembers from turn to turn is there too, in a directory named
+by its harness and its address (`claude/lammps@cannon-a/`), so an agent
+carries on with what it knew on whatever machine its kernel is started next.
+It goes when the process is removed.
 There is one database per kernel, and `jarvis up NAME` always starts from it:
 on the machine it ran on before or on any other that has the store. To start
 afresh under a name, that file must be deleted by hand.
@@ -133,6 +139,11 @@ is in it at start is not looked at.
 |---|---|---|
 | Stopped (Ctrl-C, TERM) | nothing lost | nothing lost |
 | Killed, or its node is lost | nothing lost | what it did after its last save is lost |
+
+A Claude agent keeps nothing outside the store, and that includes the login
+of the machine it runs on. So a kernel that runs Claude agents is started
+with `$CLAUDE_CODE_OAUTH_TOKEN` set, to a token made once by
+`claude setup-token`. Without it, each turn fails and says so.
 
 A kernel that starts from a save older than its last moments skips ahead in
 its numbering, so that no message or record gets a number that was given out
