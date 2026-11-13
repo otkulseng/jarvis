@@ -37,8 +37,7 @@ Example: `examples/md.rs` (100 np steps map to 10 `md.euler_10_steps`).
 ## Things noticed, not yet acted on
 
 - README was rewritten on 2026-11-13 to match the code and `not-a-compiler.md`.
-  `pixi.toml` (no tasks) and `pixi.lock` are leftovers, as are the `mirflow`
-  lines in `.gitignore`; the human has not said whether to keep them.
+  The project is Rust only: no Python tooling.
 - np kernels `expect`/index on malformed attrs or mismatched shapes (panic),
   while nary itself promises not to panic. The kernel signature returns `V`,
   so a kernel has no way to report an error.

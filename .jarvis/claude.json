@@ -1,1 +1,1 @@
-{"permissions": {"allow": ["Bash(cargo:*)", "Bash(pixi:*)"]}}
+{"permissions": {"allow": ["Bash(cargo:*)"]}}
