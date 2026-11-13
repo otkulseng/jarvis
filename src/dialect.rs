@@ -14,12 +14,12 @@ pub(crate) type Code = Rc<dyn Fn(&str, &[&dyn Any]) -> Result<Box<dyn Any>, Stri
 /// A dialect, as a value: build one, print it, pass it to `map` and `run`.
 ///
 /// ```ignore
-/// nary::Dialect::new("md")
+/// nary::Dialect::new("toy")
 ///     .equal(|[pos, mass, dt]| (
 ///         euler_step(pos, mass, dt),
 ///         np::add(pos, np::mul(dt, np::div(np::neg(pos), mass))),
 ///     ))
-///     .kernel("md.euler_step", |x: &[&np::Value]| { /* the whole step */ })
+///     .kernel("toy.euler_step", |x: &[&np::Value]| { /* the whole step */ })
 /// ```
 #[derive(Clone)]
 pub struct Dialect {

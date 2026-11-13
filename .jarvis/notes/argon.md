@@ -37,5 +37,11 @@ Measured (release, macmini, 864 atoms):
   Whole trajectories agree to 5 digits for ~1000 steps and then drift apart:
   summation order differs and MD is chaotic. Averages agree.
 
+Afterwards the human had the Euler symbols taken out of md ("very contrived,
+meant to show an example"): they are now a dialect `toy` inside
+`examples/euler.rs`. With them gone, `map` costs ~57 ms per call here and the
+argon example runs at 2.1 ms a step. The lesson stands: the fixed cost of
+`map` grows with the size of the equivalences in the dialects given.
+
 Not done: pressure (needs the virial, another symbol), a kernel for a whole
 Verlet step (needs a symbol with several results), units other than reduced.

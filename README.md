@@ -8,7 +8,7 @@ The main bet is that this is enough when agents can write kernels. An agent can 
 
 ## The pieces
 
-- A **symbol** belongs to a dialect and is named `dialect.name`: `np.add`, `md.euler_step`.
+- A **symbol** belongs to a dialect and is named `dialect.name`: `np.add`, `md.lj_forces`.
 - A **node** is a symbol applied to nodes. That is all nary knows about it. nary does not know what a node stands for, what its value is, or how it is computed.
 - A **dialect** is a value that holds two things, both optional:
   - **equivalences**: an expression in its symbols is the same as an expression in another dialect's symbols;
@@ -20,24 +20,24 @@ No dialect is special. A symbol can be an addition, a neighbour calculation, or 
 
 ```rust
 pub fn euler_step(pos: Array, mass: Array, dt: Array) -> Array {
-    nary::symbol("md.euler_step", [pos, mass, dt])
+    nary::symbol("toy.euler_step", [pos, mass, dt])
 }
 
 pub fn dialect() -> nary::Dialect {
-    nary::Dialect::new("md")
+    nary::Dialect::new("toy")
         // What the symbol means, in np.
         .equal(|[pos, mass, dt]| (
             euler_step(pos, mass, dt),
             np::add(pos, np::mul(dt, np::div(np::neg(pos), mass))),
         ))
         // Code that computes the whole step at once.
-        .kernel("md.euler_step", kernels::euler_step)
+        .kernel("toy.euler_step", |x: &[&np::Value]| { /* one pass over the particles */ })
 }
 ```
 
 ## Mapping, and what the e-graph is for
 
-An equivalence is read in both directions. It says what a symbol means in another dialect, and it lets that meaning be recognized inside a graph. So a program written entirely in `np` is mapped onto `md.euler_step` when the `md` dialect is given, without ever naming it. This is how a kernel written once is used by every later program that computes the same thing.
+An equivalence is read in both directions. It says what a symbol means in another dialect, and it lets that meaning be recognized inside a graph. So a program written entirely in `np` is mapped onto `toy.euler_step` when the `toy` dialect is given, without ever naming it. This is how a kernel written once is used by every later program that computes the same thing.
 
 The graph and the equivalences are put into an e-graph ([egglog](https://github.com/egraphs-good/egglog)), which holds every form the graph is equal to. One form is then picked in which every symbol has a kernel.
 
@@ -87,21 +87,22 @@ src/        nary: symbols, nodes, dialects, map, run, get
 np/         a dialect of arrays: arithmetic with NumPy's rules for shapes, sums along
             an axis, comparison, constants, random numbers, values handed over by Rust
 md/         a dialect of molecular dynamics: Lennard-Jones forces and energy in a
-            periodic box, and a toy Euler step
+            periodic box
 examples/   argon.rs: liquid argon, after Rahman (1964)
-            md.rs: a hundred Euler steps written in np, mapped onto ten kernels of md
+            euler.rs: the smallest whole example, with a dialect of its own: a hundred
+            steps written in np, mapped onto ten kernels
 tests/      making a dialect, the arrays of np, md's kernels against their meaning
 ```
 
 ```sh
 cargo test --workspace
 cargo run --release --example argon
-cargo run --example md
+cargo run --example euler
 ```
 
 Kernels run on the CPU, one after the other, on values the dialects define themselves. Derivatives are not implemented: a force is written by hand, as a symbol of its own. Neither is any choice between kernels other than the shortest graph.
 
-Every `get` maps its graph from the beginning, and that takes a fixed time of some hundred milliseconds with the dialects here, whatever the size of the graph. Nothing is kept from one `get` to the next. Until something is, a program should compute many steps in one `get`.
+Every `get` maps its graph from the beginning, and that takes a fixed time of some tens of milliseconds with the dialects here, whatever the size of the graph. Nothing is kept from one `get` to the next. Until something is, a program should compute many steps in one `get`.
 
 ### Liquid argon
 
