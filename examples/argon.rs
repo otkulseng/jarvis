@@ -7,14 +7,18 @@
 //! temperature and potential energy, and the radial distribution g(r).
 //!
 //! ```sh
-//! cargo run --release --example argon         # 864 atoms
-//! cargo run --release --example argon -- 8    # 2048 atoms
+//! cargo run --release --example argon             # 864 atoms, as Rahman had
+//! cargo run --release --example argon -- 20000    # any number of atoms
 //! ```
 //!
-//! The argument is the number of lattice cells a side, of four atoms each.
+//! The density is the same whatever the number of atoms: more atoms are in
+//! a larger box.
 
 use np::{Array, Value};
 use std::time::Instant;
+
+/// How many atoms there are, unless the program is given another number.
+const NUM_ATOMS: usize = 864;
 
 // Argon as Rahman had it.
 const SIGMA: f64 = 3.4; // the length unit, in Angstrom
@@ -33,13 +37,12 @@ const MEASURED: usize = 4000;
 
 fn main() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let cells: usize = match args.first() {
-        Some(cells) => cells.parse().map_err(|_| "the argument is a number of cells")?,
-        None => 6,
+    let atoms: usize = match args.first() {
+        Some(atoms) => atoms.parse().map_err(|_| "the argument is a number of atoms")?,
+        None => NUM_ATOMS,
     };
     let dialects = [np::dialect(), md::dialect()];
 
-    let atoms = 4 * cells.pow(3);
     let per_volume = DENSITY / MASS * 0.602214 * SIGMA.powi(3);
     let side = (atoms as f64 / per_volume).cbrt();
     let wanted = TEMPERATURE / EPSILON;
@@ -49,14 +52,18 @@ fn main() -> Result<(), String> {
         side * SIGMA
     );
     if side < 2.0 * CUTOFF {
-        return Err(format!("the box must be two cutoffs ({}) a side", 2.0 * CUTOFF));
+        let fewest = (per_volume * (2.0 * CUTOFF).powi(3)).ceil();
+        return Err(format!(
+            "the box must be two cutoffs ({}) a side, which takes {fewest} atoms",
+            2.0 * CUTOFF
+        ));
     }
 
     // The same nodes in every graph below.
     let (box_side, cutoff) = (np::constant(side), np::constant(CUTOFF));
     let (dt, half_dt) = (np::constant(DT), np::constant(DT / 2.0));
 
-    let mut pos = lattice(cells, side);
+    let mut pos = lattice(atoms, side);
     let mut vel = velocities(atoms, wanted, &dialects)?;
     let mut force = np::get(md::lj_forces(np::array(pos.clone()), box_side, cutoff), &dialects)?;
 
@@ -124,24 +131,28 @@ fn verlet_step(
     (pos, vel, force)
 }
 
-/// Atoms on a face-centred cubic lattice that fills the box.
-fn lattice(cells: usize, side: f64) -> Value {
+/// Atoms on a face-centred cubic lattice that fills the box. The lattice
+/// has four places in each of its cells. When that is more places than
+/// there are atoms, the empty ones are spread evenly among them.
+fn lattice(atoms: usize, side: f64) -> Value {
+    let mut cells = 1;
+    while 4 * cells * cells * cells < atoms {
+        cells += 1;
+    }
+    let places = 4 * cells * cells * cells;
     let cell = side / cells as f64;
     let within = [[0.0, 0.0, 0.0], [0.5, 0.5, 0.0], [0.5, 0.0, 0.5], [0.0, 0.5, 0.5]];
-    let mut data = Vec::new();
-    for x in 0..cells {
-        for y in 0..cells {
-            for z in 0..cells {
-                for atom in within {
-                    data.push((x as f64 + atom[0]) * cell);
-                    data.push((y as f64 + atom[1]) * cell);
-                    data.push((z as f64 + atom[2]) * cell);
-                }
-            }
+    let mut data = Vec::with_capacity(3 * atoms);
+    for atom in 0..atoms {
+        let place = atom * places / atoms;
+        let (which, corner) = (place / 4, within[place % 4]);
+        let at = [which / (cells * cells), which / cells % cells, which % cells];
+        for k in 0..3 {
+            data.push((at[k] as f64 + corner[k]) * cell);
         }
     }
     Value {
-        shape: vec![data.len() / 3, 3],
+        shape: vec![atoms, 3],
         data,
     }
 }
@@ -170,11 +181,17 @@ struct Measured {
     potential: f64,
     /// The total energy: the first, and the least and the most since.
     energy: Option<(f64, f64, f64)>,
-    /// How many pairs of atoms were at each distance, in bins of `BIN`.
+    /// How many atoms were at each distance from one of the atoms that the
+    /// distances are counted from, in bins of `BIN`.
     distances: Vec<usize>,
 }
 
 const BIN: f64 = 0.05;
+/// g(r) is measured up to this distance, or half the box if that is less.
+const FARTHEST: f64 = 5.0;
+/// Distances are counted from this many atoms at most, to all the others:
+/// from every atom, the counting would take longer than the simulation.
+const COUNTED_FROM: usize = 1000;
 
 impl Measured {
     fn new(atoms: usize, side: f64) -> Measured {
@@ -185,7 +202,7 @@ impl Measured {
             temperature: 0.0,
             potential: 0.0,
             energy: None,
-            distances: vec![0; (side / 2.0 / BIN) as usize],
+            distances: vec![0; ((side / 2.0).min(FARTHEST) / BIN) as usize],
         }
     }
 
@@ -196,8 +213,11 @@ impl Measured {
         let energy = potential + kinetic;
         let (first, least, most) = self.energy.unwrap_or((energy, energy, energy));
         self.energy = Some((first, least.min(energy), most.max(energy)));
-        for i in 0..self.atoms {
-            for j in i + 1..self.atoms {
+        for i in 0..self.atoms.min(COUNTED_FROM) {
+            for j in 0..self.atoms {
+                if i == j {
+                    continue;
+                }
                 let mut r2 = 0.0;
                 for k in 0..3 {
                     let d = pos.data[3 * i + k] - pos.data[3 * j + k];
@@ -233,15 +253,16 @@ impl Measured {
         // How many atoms are at each distance from an atom, against how
         // many there would be if they were spread evenly.
         let per_volume = atoms / self.side.powi(3);
+        let counted_from = self.atoms.min(COUNTED_FROM) as f64;
         let g: Vec<(f64, f64)> = self
             .distances
             .iter()
             .enumerate()
-            .map(|(bin, pairs)| {
+            .map(|(bin, found)| {
                 let (near, far) = (bin as f64 * BIN, (bin + 1) as f64 * BIN);
                 let shell = 4.0 / 3.0 * std::f64::consts::PI * (far.powi(3) - near.powi(3));
-                let even = 0.5 * atoms * per_volume * shell * times;
-                ((near + far) / 2.0, *pairs as f64 / even)
+                let even = counted_from * per_volume * shell * times;
+                ((near + far) / 2.0, *found as f64 / even)
             })
             .collect();
         if let Some((r, most)) = g.iter().copied().max_by(|a, b| a.1.total_cmp(&b.1)) {
