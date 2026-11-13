@@ -6,4 +6,7 @@
 - The only extra allowed command is `cargo` (.jarvis/claude.json); compound
   shell commands with pipes or `;` are refused, so run one command per call.
 - Landing: `git push . HEAD:nary` is refused while `nary` is checked out in
-  the human's working copy. Tell the human to `git merge nary@macmini` there.
+  the human's working copy (`/Users/otkulseng/jarvis`). When the human asked
+  for the changes on the branch (2026-11-13) and that copy was clean, it was
+  landed with `git -C /Users/otkulseng/jarvis merge --ff-only nary@macmini`.
+  Check `git -C … status` first; if it is not clean, ask instead.
