@@ -1,18 +1,31 @@
 //! Running a graph: its kernels are called, each after its inputs.
 
 use crate::dialect::sound;
-use crate::{graph, map, Dialect, Graph, Node};
+use crate::{graph, graph_all, map, Dialect, Graph, Node};
 use std::any::Any;
+use std::rc::Rc;
 
 /// Call the kernel of each step on the results of its inputs, and return
-/// the result of the last. When several of the dialects have a kernel for a
-/// symbol, the first of them is used.
+/// the results that the graph was asked for, in that order. When several of
+/// the dialects have a kernel for a symbol, the first of them is used.
 ///
 /// nary does not look at the results: each kernel is given what the kernels
-/// before it returned.
-pub fn run(graph: &Graph, dialects: &[Dialect]) -> Result<Box<dyn Any>, String> {
+/// before it returned. A result is let go of as soon as nothing after it
+/// needs it.
+pub fn run(graph: &Graph, dialects: &[Dialect]) -> Result<Vec<Rc<dyn Any>>, String> {
     sound(dialects)?;
-    let mut results: Vec<Box<dyn Any>> = Vec::with_capacity(graph.steps.len());
+    if graph.results.is_empty() {
+        return Err("there is nothing in the graph to run".into());
+    }
+    // How many times each result is still needed.
+    let mut needed = vec![0usize; graph.steps.len()];
+    let uses = graph.steps.iter().flat_map(|step| &step.inputs);
+    for used in uses.chain(&graph.results) {
+        *needed.get_mut(*used).ok_or_else(|| {
+            format!("the graph uses its step {used}, and has no such step")
+        })? += 1;
+    }
+    let mut results: Vec<Option<Rc<dyn Any>>> = Vec::with_capacity(graph.steps.len());
     for step in &graph.steps {
         let code = dialects
             .iter()
@@ -23,12 +36,28 @@ pub fn run(graph: &Graph, dialects: &[Dialect]) -> Result<Box<dyn Any>, String> 
                     step.symbol
                 )
             })?;
-        let inputs: Vec<&dyn Any> = step.inputs.iter().map(|i| results[*i].as_ref()).collect();
-        results.push(code(&step.attrs, &inputs)?);
+        let inputs: Option<Vec<&dyn Any>> = step
+            .inputs
+            .iter()
+            .map(|i| results.get(*i).and_then(|r| r.as_deref()))
+            .collect();
+        let inputs = inputs.ok_or_else(|| {
+            format!("`{}` comes before one of its inputs in the graph", step.symbol)
+        })?;
+        let result = code(&step.attrs, &inputs)?;
+        for used in &step.inputs {
+            needed[*used] -= 1;
+            if needed[*used] == 0 {
+                results[*used] = None;
+            }
+        }
+        results.push(Some(Rc::from(result)));
     }
-    results
-        .pop()
-        .ok_or_else(|| "there is nothing in the graph to run".to_string())
+    Ok(graph
+        .results
+        .iter()
+        .filter_map(|asked| results[*asked].clone())
+        .collect())
 }
 
 /// Compute a node: its graph is mapped onto the kernels of the dialects,
@@ -38,13 +67,37 @@ pub fn run(graph: &Graph, dialects: &[Dialect]) -> Result<Box<dyn Any>, String> 
 /// ```ignore
 /// let positions: np::Value = nary::get(pos, &dialects)?;
 /// ```
-pub fn get<V: 'static>(node: impl Into<Node>, dialects: &[Dialect]) -> Result<V, String> {
+pub fn get<V: 'static + Clone>(node: impl Into<Node>, dialects: &[Dialect]) -> Result<V, String> {
     let mapped = map(&graph(node), dialects)?;
-    match run(&mapped, dialects)?.downcast::<V>() {
-        Ok(result) => Ok(*result),
-        Err(_) => Err(format!(
-            "the kernels computed something that is not a `{}`",
-            std::any::type_name::<V>()
-        )),
-    }
+    typed(run(&mapped, dialects)?)?
+        .pop()
+        .ok_or_else(|| "nothing was computed".to_string())
+}
+
+/// Compute several nodes at once, as one graph: what they share is computed
+/// once. The results are in the order of the nodes.
+///
+/// ```ignore
+/// let both: Vec<np::Value> = nary::get_all([pos, vel], &dialects)?;
+/// ```
+pub fn get_all<V: 'static + Clone>(
+    nodes: impl IntoIterator<Item = impl Into<Node>>,
+    dialects: &[Dialect],
+) -> Result<Vec<V>, String> {
+    let mapped = map(&graph_all(nodes), dialects)?;
+    typed(run(&mapped, dialects)?)
+}
+
+/// Results as `V`s. One that two nodes share is copied for the second.
+fn typed<V: 'static + Clone>(results: Vec<Rc<dyn Any>>) -> Result<Vec<V>, String> {
+    results
+        .into_iter()
+        .map(|result| match result.downcast::<V>() {
+            Ok(result) => Ok(Rc::unwrap_or_clone(result)),
+            Err(_) => Err(format!(
+                "the kernels computed something that is not a `{}`",
+                std::any::type_name::<V>()
+            )),
+        })
+        .collect()
 }

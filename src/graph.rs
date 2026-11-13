@@ -12,8 +12,9 @@ pub struct Step {
     pub inputs: Vec<usize>,
 }
 
-/// A node and all it is made of: its steps, each after its inputs. The last
-/// step is the node itself.
+/// Some nodes and all they are made of: the steps, each after its inputs,
+/// and which of them are the nodes that were asked for. What two of the
+/// nodes share is in the graph once.
 ///
 /// Printed, a graph is one line for each step:
 ///
@@ -24,6 +25,8 @@ pub struct Step {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Graph {
     pub steps: Vec<Step>,
+    /// The steps that were asked for, in the order they were asked for.
+    pub results: Vec<usize>,
 }
 
 impl fmt::Display for Graph {
@@ -42,11 +45,16 @@ impl fmt::Display for Graph {
 
 /// The graph a node stands for.
 pub fn graph(node: impl Into<Node>) -> Graph {
-    let root = node.into();
+    graph_all([node])
+}
+
+/// The one graph that several nodes stand for.
+pub fn graph_all(nodes: impl IntoIterator<Item = impl Into<Node>>) -> Graph {
+    let roots: Vec<Node> = nodes.into_iter().map(Into::into).collect();
     let mut steps = Vec::new();
     let mut at: HashMap<Node, usize> = HashMap::new();
     // Each node after its inputs, without recursion: a graph can be deep.
-    let mut waiting = vec![root];
+    let mut waiting: Vec<Node> = roots.iter().rev().copied().collect();
     while let Some(&node) = waiting.last() {
         if at.contains_key(&node) {
             waiting.pop();
@@ -71,5 +79,6 @@ pub fn graph(node: impl Into<Node>) -> Graph {
         at.insert(node, steps.len() - 1);
         waiting.pop();
     }
-    Graph { steps }
+    let results = roots.iter().map(|root| at[root]).collect();
+    Graph { steps, results }
 }

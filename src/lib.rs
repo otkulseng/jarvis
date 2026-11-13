@@ -39,9 +39,9 @@ mod map;
 mod run;
 
 pub use dialect::Dialect;
-pub use graph::{graph, Graph, Step};
+pub use graph::{graph, graph_all, Graph, Step};
 pub use map::map;
-pub use run::{get, run};
+pub use run::{get, get_all, run};
 
 use std::cell::RefCell;
 use std::collections::HashMap;

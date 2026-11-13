@@ -77,8 +77,11 @@ pub fn map(graph: &Graph, dialects: &[Dialect]) -> Result<Graph, String> {
 
 fn map_in(graph: &Graph, dialects: &[Dialect]) -> Result<Graph, Box<dyn std::error::Error>> {
     sound(dialects)?;
-    if graph.steps.is_empty() {
+    if graph.results.is_empty() {
         return Err("there is nothing in the graph to map".into());
+    }
+    if let Some(step) = graph.results.iter().find(|r| **r >= graph.steps.len()) {
+        return Err(format!("the graph was asked for its step {step}, and has no such step").into());
     }
     // A table for each symbol, at each number of inputs it is used with.
     let mut tables: BTreeMap<String, (String, usize)> = BTreeMap::new();
@@ -164,10 +167,23 @@ fn map_in(graph: &Graph, dialects: &[Dialect]) -> Result<Graph, Box<dyn std::err
         Box::new(once),
     ))])?;
 
-    let (sort, value) = eg.eval_expr(&exprs::var(&name(graph.steps.len() - 1)))?;
-    let costs = Extractor::<BigInt>::compute_costs_from_rootsorts(Some(vec![sort]), &eg, Fewest);
+    // One form for each node asked for. What they share is picked the same
+    // way for each, so it is in the mapped graph once.
+    let mut roots = Vec::new();
+    let mut sorts = Vec::new();
+    for result in &graph.results {
+        let (sort, value) = eg.eval_expr(&exprs::var(&name(*result)))?;
+        sorts.push(sort);
+        roots.push(value);
+    }
+    sorts.truncate(1);
+    let costs = Extractor::<BigInt>::compute_costs_from_rootsorts(Some(sorts), &eg, Fewest);
     let mut dag = TermDag::default();
-    let Some((_, best)) = costs.extract_best(&eg, &mut dag, value) else {
+    let picked: Option<Vec<TermId>> = roots
+        .iter()
+        .map(|root| costs.extract_best(&eg, &mut dag, *root).map(|(_, best)| best))
+        .collect();
+    let Some(picked) = picked else {
         let without: BTreeSet<String> = graph
             .steps
             .iter()
@@ -189,7 +205,7 @@ fn map_in(graph: &Graph, dialects: &[Dialect]) -> Result<Graph, Box<dyn std::err
     // The picked form as steps, each once. Terms are numbered after what
     // they are made of, so going through them in order is enough.
     let mut wanted = BTreeSet::new();
-    let mut waiting: Vec<TermId> = vec![best];
+    let mut waiting: Vec<TermId> = picked.clone();
     while let Some(term) = waiting.pop() {
         if !wanted.insert(term) {
             continue;
@@ -198,7 +214,10 @@ fn map_in(graph: &Graph, dialects: &[Dialect]) -> Result<Graph, Box<dyn std::err
             waiting.extend(columns[1..].iter().copied());
         }
     }
-    let mut mapped = Graph { steps: vec![] };
+    let mut mapped = Graph {
+        steps: vec![],
+        results: vec![],
+    };
     let mut at: HashMap<TermId, usize> = HashMap::new();
     for term in wanted {
         let Term::App(table, columns) = dag.get(term) else {
@@ -218,5 +237,6 @@ fn map_in(graph: &Graph, dialects: &[Dialect]) -> Result<Graph, Box<dyn std::err
         });
         at.insert(term, mapped.steps.len() - 1);
     }
+    mapped.results = picked.iter().map(|term| at[term]).collect();
     Ok(mapped)
 }

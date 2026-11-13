@@ -31,8 +31,10 @@ Dialect crates (workspace members, lib names `np` and `md`):
 - `md/`: `euler_step`, `euler_10_steps`, each with an equivalence to np and a
   fused kernel.
 
-Tests: `tests/dialect.rs` (7 tests, with a local `toy` dialect).
-Example: `examples/md.rs` (100 np steps map to 10 `md.euler_10_steps`).
+Tests: `tests/dialect.rs` (a local `toy` dialect), `tests/np.rs`,
+`tests/lj.rs`. Examples: `examples/md.rs` (100 np steps map to 10
+`md.euler_10_steps`), `examples/argon.rs` (see `argon.md`, which also lists
+what was added to the core, np and md after this note was written).
 
 ## Things noticed, not yet acted on
 

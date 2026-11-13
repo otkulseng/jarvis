@@ -54,7 +54,7 @@ Recognition goes exactly as far as the declared equivalences. nary does not know
 
 ## Rust owns the graph breaks
 
-Operations on arrays build a graph and compute nothing. Calling `get` maps the graph of the requested node, runs its kernels, and returns the value.
+Operations on arrays build a graph and compute nothing. Calling `get` maps the graph of the requested node, runs its kernels, and returns the value. `get_all` does the same for several nodes at once, as one graph: what they share is computed once.
 
 A value that has been computed is ordinary Rust data. Rust handles the branch that depends on it, errors, I/O, checkpointing, and the surrounding application. The graph is complete up to that boundary.
 
@@ -84,15 +84,29 @@ The code is a small prototype of exactly the above.
 
 ```text
 src/        nary: symbols, nodes, dialects, map, run, get
-np/         a dialect of arrays: add, sub, mul, div, neg, constants, random numbers
-md/         a dialect of molecular dynamics: an Euler step, and ten of them
-examples/   md.rs: a hundred steps written in np, mapped onto ten kernels of md
-tests/      making a dialect, and what mapping does with it
+np/         a dialect of arrays: arithmetic with NumPy's rules for shapes, sums along
+            an axis, comparison, constants, random numbers, values handed over by Rust
+md/         a dialect of molecular dynamics: Lennard-Jones forces and energy in a
+            periodic box, and a toy Euler step
+examples/   argon.rs: liquid argon, after Rahman (1964)
+            md.rs: a hundred Euler steps written in np, mapped onto ten kernels of md
+tests/      making a dialect, the arrays of np, md's kernels against their meaning
 ```
 
 ```sh
 cargo test --workspace
+cargo run --release --example argon
 cargo run --example md
 ```
 
-Kernels run on the CPU, one after the other, on values the dialects define themselves. Derivatives are not implemented. Neither is any choice between kernels other than the shortest graph.
+Kernels run on the CPU, one after the other, on values the dialects define themselves. Derivatives are not implemented: a force is written by hand, as a symbol of its own. Neither is any choice between kernels other than the shortest graph.
+
+Every `get` maps its graph from the beginning, and that takes a fixed time of some hundred milliseconds with the dialects here, whatever the size of the graph. Nothing is kept from one `get` to the next. Until something is, a program should compute many steps in one `get`.
+
+### Liquid argon
+
+`examples/argon.rs` is 864 Lennard-Jones atoms at 94.4 K and 1.374 g/cm³. The time step is written in np, and the forces are `md.lj_forces`. That symbol means a sum over all pairs of atoms, in np. Its kernel looks only at atoms in neighbouring cells of the box: a different algorithm, which the equivalence lets the tests check against the meaning.
+
+Every hundred steps the program gets the atoms back, and Rust measures the temperature, rescales the velocities while the liquid settles, and counts distances for g(r). The first peak of g(r) comes out at 3.7 Å with a height of 2.8, to be held against Rahman's figure 2.
+
+With `-- 3 np` the same program runs 108 atoms on np's kernels alone.
