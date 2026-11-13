@@ -1,0 +1,18 @@
+[package]
+name = "nary"
+version = "0.0.1"
+edition = "2021"
+
+[workspace]
+members = ["mlip"]
+
+[dependencies]
+egglog = "3.0.0"
+pjrt = "0.2.0"
+
+[dev-dependencies]
+nary-mlip = { path = "mlip" }
+
+[profile.dev]
+opt-level = 1
+
