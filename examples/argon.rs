@@ -7,13 +7,11 @@
 //! temperature and potential energy, and the radial distribution g(r).
 //!
 //! ```sh
-//! cargo run --release --example argon            # 864 atoms, md's kernels
-//! cargo run --release --example argon -- 3 np    # 108 atoms, np's kernels alone
+//! cargo run --release --example argon         # 864 atoms
+//! cargo run --release --example argon -- 8    # 2048 atoms
 //! ```
 //!
-//! The first argument is the number of lattice cells a side, of four atoms
-//! each. With `np`, the forces are computed as what they mean in np, over
-//! all pairs of atoms: the same program, the same numbers, slower.
+//! The argument is the number of lattice cells a side, of four atoms each.
 
 use np::{Array, Value};
 use std::time::Instant;
@@ -36,14 +34,10 @@ const MEASURED: usize = 4000;
 fn main() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cells: usize = match args.first() {
-        Some(cells) => cells.parse().map_err(|_| "the first argument is a number of cells")?,
+        Some(cells) => cells.parse().map_err(|_| "the argument is a number of cells")?,
         None => 6,
     };
-    let dialects = if args.iter().any(|a| a == "np") {
-        vec![np::dialect(), md::meaning()]
-    } else {
-        vec![np::dialect(), md::dialect()]
-    };
+    let dialects = [np::dialect(), md::dialect()];
 
     let atoms = 4 * cells.pow(3);
     let per_volume = DENSITY / MASS * 0.602214 * SIGMA.powi(3);

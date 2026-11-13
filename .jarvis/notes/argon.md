@@ -18,8 +18,12 @@ What was added:
   `array(Value)`: a leaf whose attribute is an index into a thread-local list
   of values (never freed).
 - md: `lj_forces`, `lj_energy` (`md/src/lj.rs`: symbols and their np
-  meaning; shifted, truncated LJ, minimum image), cell-list kernels sharing
-  `kernels/pairs.rs`; `md::meaning()` = equivalences only, for checking.
+  form; shifted, truncated LJ, minimum image), cell-list kernels sharing
+  `kernels/pairs.rs`.
+- There was briefly an `md::meaning()` (the equivalences without kernels, to
+  run a program on np alone). The human had it removed: see
+  `one-dialect-per-crate.md`. Tests now write the np formula themselves and
+  compute it with `[np::dialect()]`.
 - No attribute may depend on the number of atoms, since attributes are
   literal in an equivalence. Hence `expand_dims` instead of reshape, and box
   side / cutoff are passed as `np.const` nodes, not attributes.

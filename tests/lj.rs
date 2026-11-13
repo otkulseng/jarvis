@@ -1,4 +1,4 @@
-//! Lennard-Jones particles: the kernels of md against what they mean in np.
+//! Lennard-Jones particles: the kernels of md against the same written in np.
 
 use np::{Array, Value};
 
@@ -31,26 +31,61 @@ fn close(a: &Value, b: &Value) {
     }
 }
 
+/// Every pair of particles, written in np: the vector between the two, and
+/// 1/r^2 for the pairs within the cutoff, zero for the others.
+fn pairs_in_np(pos: Array, side: Array, cutoff: Array) -> (Array, Array) {
+    let apart = np::sub(np::expand_dims(pos, 1), np::expand_dims(pos, 0));
+    let apart = np::sub(apart, np::mul(side, np::round(np::div(apart, side))));
+    let r2 = np::sum(np::mul(apart, apart), 2);
+    let other = np::less(np::constant(0.0), r2);
+    let meets = np::mul(other, np::less(r2, np::mul(cutoff, cutoff)));
+    let r2 = np::add(r2, np::sub(np::constant(1.0), other));
+    (apart, np::div(meets, r2))
+}
+
+/// The forces, written in np over all pairs. md is not called.
+fn forces_in_np(pos: Array, side: Array, cutoff: Array) -> Array {
+    let (apart, inv2) = pairs_in_np(pos, side, cutoff);
+    let inv6 = np::mul(inv2, np::mul(inv2, inv2));
+    let twice = np::mul(np::constant(2.0), np::mul(inv6, inv6));
+    let strength = np::mul(np::constant(24.0), np::mul(inv2, np::sub(twice, inv6)));
+    np::sum(np::mul(np::expand_dims(strength, 2), apart), 1)
+}
+
+/// The energy, written in np over all pairs. md is not called.
+fn energy_in_np(pos: Array, side: Array, cutoff: Array) -> Array {
+    let (_, inv2) = pairs_in_np(pos, side, cutoff);
+    let inv6 = np::mul(inv2, np::mul(inv2, inv2));
+    let four = np::constant(4.0);
+    let pair = np::mul(four, np::sub(np::mul(inv6, inv6), inv6));
+    let c2 = np::div(np::constant(1.0), np::mul(cutoff, cutoff));
+    let c6 = np::mul(c2, np::mul(c2, c2));
+    let at_cutoff = np::mul(four, np::sub(np::mul(c6, c6), c6));
+    let meets = np::less(np::constant(0.0), inv2);
+    let pair = np::sub(pair, np::mul(meets, at_cutoff));
+    np::mul(np::constant(0.5), np::sum(np::sum(pair, 1), 0))
+}
+
 /// Forces and energy by md's kernels, and by np's alone.
 fn both_ways(cells: usize) -> (Vec<Value>, Vec<Value>) {
     let (pos, side) = particles(cells);
     let (side, cutoff) = (np::constant(side), np::constant(2.5));
-    let asked = [
+
+    let by_md = [
         md::lj_forces(pos, side, cutoff),
         md::lj_energy(pos, side, cutoff),
     ];
-
-    let with_kernels = [np::dialect(), md::dialect()];
-    let plan = nary::map(&nary::graph_all(asked), &with_kernels).unwrap();
+    let dialects = [np::dialect(), md::dialect()];
+    let plan = nary::map(&nary::graph_all(by_md), &dialects).unwrap();
     assert_eq!(plan.steps.len(), 5, "{plan}");
 
-    let in_np = [np::dialect(), md::meaning()];
-    let plan = nary::map(&nary::graph_all(asked), &in_np).unwrap();
-    assert!(!plan.to_string().contains("md."), "{plan}");
-
+    let by_np = [
+        forces_in_np(pos, side, cutoff),
+        energy_in_np(pos, side, cutoff),
+    ];
     (
-        np::get_all(&asked, &with_kernels).unwrap(),
-        np::get_all(&asked, &in_np).unwrap(),
+        np::get_all(&by_md, &dialects).unwrap(),
+        np::get_all(&by_np, &[np::dialect()]).unwrap(),
     )
 }
 
@@ -97,22 +132,18 @@ fn the_force_is_how_the_energy_changes() {
 
 #[test]
 fn a_program_written_in_np_alone_is_mapped_onto_the_kernel() {
-    // The same mathematics as md's, written here: md is never called.
     let (pos, side) = particles(4);
     let (side, cutoff) = (np::constant(side), np::constant(2.5));
-    let apart = np::sub(np::expand_dims(pos, 1), np::expand_dims(pos, 0));
-    let apart = np::sub(apart, np::mul(side, np::round(np::div(apart, side))));
-    let r2 = np::sum(np::mul(apart, apart), 2);
-    let other = np::less(np::constant(0.0), r2);
-    let meets = np::mul(other, np::less(r2, np::mul(cutoff, cutoff)));
-    let r2 = np::add(r2, np::sub(np::constant(1.0), other));
-    let inv2 = np::div(meets, r2);
-    let inv6 = np::mul(inv2, np::mul(inv2, inv2));
-    let twice = np::mul(np::constant(2.0), np::mul(inv6, inv6));
-    let strength = np::mul(np::constant(24.0), np::mul(inv2, np::sub(twice, inv6)));
-    let forces = np::sum(np::mul(np::expand_dims(strength, 2), apart), 1);
-
-    let plan = nary::map(&nary::graph(forces), &[np::dialect(), md::dialect()]).unwrap();
+    let asked = [
+        forces_in_np(pos, side, cutoff),
+        energy_in_np(pos, side, cutoff),
+    ];
+    // With np alone it stays as it was written.
+    let plan = nary::map(&nary::graph_all(asked), &[np::dialect()]).unwrap();
+    assert!(!plan.to_string().contains("md."), "{plan}");
+    // Given md as well: the particles, the two numbers, and md's two kernels.
+    let plan = nary::map(&nary::graph_all(asked), &[np::dialect(), md::dialect()]).unwrap();
     assert!(plan.to_string().contains("md.lj_forces"), "{plan}");
-    assert_eq!(plan.steps.len(), 4, "{plan}");
+    assert!(plan.to_string().contains("md.lj_energy"), "{plan}");
+    assert_eq!(plan.steps.len(), 5, "{plan}");
 }

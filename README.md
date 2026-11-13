@@ -91,7 +91,7 @@ md/         a dialect of molecular dynamics: Lennard-Jones forces and energy in 
 examples/   argon.rs: liquid argon, after Rahman (1964)
             euler.rs: the smallest whole example, with a dialect of its own: a hundred
             steps written in np, mapped onto ten kernels
-tests/      making a dialect, the arrays of np, md's kernels against their meaning
+tests/      making a dialect, the arrays of np, md's kernels against the same in np
 ```
 
 ```sh
@@ -106,8 +106,6 @@ Every `get` maps its graph from the beginning: nothing is kept from one `get` to
 
 ### Liquid argon
 
-`examples/argon.rs` is 864 Lennard-Jones atoms at 94.4 K and 1.374 g/cm³. The time step is written in np, and the forces are `md.lj_forces`. That symbol means a sum over all pairs of atoms, in np. Its kernel looks only at atoms in neighbouring cells of the box: a different algorithm, which the equivalence lets the tests check against the meaning.
+`examples/argon.rs` is 864 Lennard-Jones atoms at 94.4 K and 1.374 g/cm³. The time step is written in np, and the forces are `md.lj_forces`. That symbol equals a sum over all pairs of atoms, in np. Its kernel looks only at atoms in neighbouring cells of the box: a different algorithm, which the tests hold against the sum written in np.
 
 Every hundred steps the program gets the atoms back, and Rust measures the temperature, rescales the velocities while the liquid settles, and counts distances for g(r). The first peak of g(r) comes out at 3.7 Å with a height of 2.8, to be held against Rahman's figure 2.
-
-With `-- 3 np` the same program runs 108 atoms on np's kernels alone.
