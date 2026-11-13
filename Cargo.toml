@@ -11,6 +11,10 @@ egglog = "3.0.0"
 # The same numbers egglog counts with, for costs that never run out.
 num = "0.4.3"
 
+[features]
+# For the examples and tests: md's kernels on every core.
+rayon = ["nary-md/rayon"]
+
 [dev-dependencies]
 nary-np = { path = "np" }
 nary-md = { path = "md" }

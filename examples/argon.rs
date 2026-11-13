@@ -9,12 +9,12 @@
 //! ```sh
 //! cargo run --release --example argon             # 864 atoms, as Rahman had
 //! cargo run --release --example argon -- 20000    # any number of atoms
+//! cargo run --release --features rayon --example argon -- 20000    # on every core
 //! ```
 //!
 //! The density is the same whatever the number of atoms: more atoms are in
 //! a larger box.
 
-use np::{Array, Value};
 use std::time::Instant;
 
 /// How many atoms there are, unless the program is given another number.
@@ -36,8 +36,7 @@ const SETTLING: usize = 2000;
 const MEASURED: usize = 4000;
 
 fn main() -> Result<(), String> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let atoms: usize = match args.first() {
+    let atoms: usize = match std::env::args().nth(1) {
         Some(atoms) => atoms.parse().map_err(|_| "the argument is a number of atoms")?,
         None => NUM_ATOMS,
     };
@@ -60,21 +59,28 @@ fn main() -> Result<(), String> {
     }
 
     // The same nodes in every graph below.
-    let (box_side, cutoff) = (np::constant(side), np::constant(CUTOFF));
-    let (dt, half_dt) = (np::constant(DT), np::constant(DT / 2.0));
+    let (box_side, cutoff, dt) = (np::constant(side), np::constant(CUTOFF), np::constant(DT));
+    let forces = |pos| md::lj_forces(pos, box_side, cutoff);
 
-    let mut pos = lattice(atoms, side);
-    let mut vel = velocities(atoms, wanted, &dialects)?;
-    let mut force = np::get(md::lj_forces(np::array(pos.clone()), box_side, cutoff), &dialects)?;
+    // Atoms on a lattice, with random velocities at the temperature.
+    let mut pos = md::fcc_lattice(atoms, side);
+    let (random, _) = np::random::uniform(np::random::from_seed(1964), vec![atoms, 3]);
+    let mut vel = np::get(random, &dialects)?;
+    md::remove_drift(&mut vel);
+    md::set_temperature(&mut vel, wanted);
+    let mut force = np::get(forces(np::array(pos.clone())), &dialects)?;
 
-    let mut measured = Measured::new(atoms, side);
+    // What is measured while the atoms are left alone.
+    let mut g = md::RadialDistribution::new(side, 5.0, 0.05);
+    let (mut temperatures, mut potentials, mut energies) = (vec![], vec![], vec![]);
+
     let started = Instant::now();
     println!("    step  temperature  potential/atom  energy/atom");
     for stretch in 0..(SETTLING + MEASURED) / STRIDE {
         // A stretch of steps, as one graph. Nothing is computed here.
         let (mut x, mut v, mut f) = (np::array(pos), np::array(vel), np::array(force));
         for _ in 0..STRIDE {
-            (x, v, f) = verlet_step(x, v, f, |x| md::lj_forces(x, box_side, cutoff), dt, half_dt);
+            (x, v, f) = md::verlet_step(x, v, f, forces, dt);
         }
         let potential = md::lj_energy(x, box_side, cutoff);
 
@@ -85,24 +91,26 @@ fn main() -> Result<(), String> {
         let potential = next()?.data[0];
 
         let step = (stretch + 1) * STRIDE;
-        let kinetic = 0.5 * vel.data.iter().map(|v| v * v).sum::<f64>();
-        let temperature = 2.0 * kinetic / (3 * atoms - 3) as f64;
+        let temperature = md::temperature(&vel);
+        let energy = potential + md::kinetic_energy(&vel);
         if step % 500 == 0 {
             println!(
                 "{step:8}  {temperature:11.4}  {:14.4}  {:11.5}",
                 potential / atoms as f64,
-                (potential + kinetic) / atoms as f64
+                energy / atoms as f64
             );
         }
         if step <= SETTLING {
             // Bring the atoms to the temperature that is wanted.
-            let scale = (wanted / temperature).sqrt();
-            vel.data.iter_mut().for_each(|v| *v *= scale);
+            md::set_temperature(&mut vel, wanted);
             if step == SETTLING {
                 println!("          (left alone from here)");
             }
         } else {
-            measured.take(&pos, temperature, potential, kinetic);
+            g.count(&pos);
+            temperatures.push(temperature);
+            potentials.push(potential);
+            energies.push(energy);
         }
     }
     let seconds = started.elapsed().as_secs_f64();
@@ -110,170 +118,35 @@ fn main() -> Result<(), String> {
         "{:.2} ms a step\n",
         1000.0 * seconds / (SETTLING + MEASURED) as f64
     );
-    measured.print();
+
+    let mean = |all: &[f64]| all.iter().sum::<f64>() / all.len() as f64;
+    let temperature = mean(&temperatures);
+    println!(
+        "temperature         {temperature:.4}   ({:.1} K)",
+        temperature * EPSILON
+    );
+    println!(
+        "potential per atom  {:.4}  (pairs beyond {CUTOFF} left out, and zero at {CUTOFF})",
+        mean(&potentials) / atoms as f64
+    );
+    let least = energies.iter().copied().fold(f64::INFINITY, f64::min);
+    let most = energies.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    println!(
+        "energy per atom     {:.5}, kept within {:.1e} of itself",
+        energies[0] / atoms as f64,
+        (most - least) / energies[0].abs()
+    );
+
+    let g = g.values();
+    if let Some((r, most)) = g.iter().copied().max_by(|a, b| a.1.total_cmp(&b.1)) {
+        println!(
+            "g(r) is highest at  r = {r:.3} ({:.2} A), where it is {most:.2}\n",
+            r * SIGMA
+        );
+    }
+    println!("    r    r (A)    g(r)");
+    for (r, g) in g {
+        println!("{r:5.3}  {:7.3}  {g:6.3}  {}", r * SIGMA, "#".repeat((g * 12.0) as usize));
+    }
     Ok(())
-}
-
-/// One step of the velocity Verlet method, written in np: the positions,
-/// velocities and forces after the time `dt`. The atoms have the mass one.
-fn verlet_step(
-    pos: Array,
-    vel: Array,
-    force: Array,
-    forces: impl Fn(Array) -> Array,
-    dt: Array,
-    half_dt: Array,
-) -> (Array, Array, Array) {
-    let halfway = np::add(vel, np::mul(half_dt, force));
-    let pos = np::add(pos, np::mul(dt, halfway));
-    let force = forces(pos);
-    let vel = np::add(halfway, np::mul(half_dt, force));
-    (pos, vel, force)
-}
-
-/// Atoms on a face-centred cubic lattice that fills the box. The lattice
-/// has four places in each of its cells. When that is more places than
-/// there are atoms, the empty ones are spread evenly among them.
-fn lattice(atoms: usize, side: f64) -> Value {
-    let mut cells = 1;
-    while 4 * cells * cells * cells < atoms {
-        cells += 1;
-    }
-    let places = 4 * cells * cells * cells;
-    let cell = side / cells as f64;
-    let within = [[0.0, 0.0, 0.0], [0.5, 0.5, 0.0], [0.5, 0.0, 0.5], [0.0, 0.5, 0.5]];
-    let mut data = Vec::with_capacity(3 * atoms);
-    for atom in 0..atoms {
-        let place = atom * places / atoms;
-        let (which, corner) = (place / 4, within[place % 4]);
-        let at = [which / (cells * cells), which / cells % cells, which % cells];
-        for k in 0..3 {
-            data.push((at[k] as f64 + corner[k]) * cell);
-        }
-    }
-    Value {
-        shape: vec![atoms, 3],
-        data,
-    }
-}
-
-/// Random velocities that carry the atoms nowhere as a whole, at the
-/// temperature that is wanted.
-fn velocities(atoms: usize, wanted: f64, dialects: &[nary::Dialect]) -> Result<Value, String> {
-    let (random, _) = np::random::uniform(np::random::from_seed(1964), vec![atoms, 3]);
-    let mut vel = np::get(random, dialects)?;
-    for k in 0..3 {
-        let mean = vel.data.iter().skip(k).step_by(3).sum::<f64>() / atoms as f64;
-        vel.data.iter_mut().skip(k).step_by(3).for_each(|v| *v -= mean);
-    }
-    let temperature = vel.data.iter().map(|v| v * v).sum::<f64>() / (3 * atoms - 3) as f64;
-    let scale = (wanted / temperature).sqrt();
-    vel.data.iter_mut().for_each(|v| *v *= scale);
-    Ok(vel)
-}
-
-/// What is measured while the atoms are left alone.
-struct Measured {
-    atoms: usize,
-    side: f64,
-    times: usize,
-    temperature: f64,
-    potential: f64,
-    /// The total energy: the first, and the least and the most since.
-    energy: Option<(f64, f64, f64)>,
-    /// How many atoms were at each distance from one of the atoms that the
-    /// distances are counted from, in bins of `BIN`.
-    distances: Vec<usize>,
-}
-
-const BIN: f64 = 0.05;
-/// g(r) is measured up to this distance, or half the box if that is less.
-const FARTHEST: f64 = 5.0;
-/// Distances are counted from this many atoms at most, to all the others:
-/// from every atom, the counting would take longer than the simulation.
-const COUNTED_FROM: usize = 1000;
-
-impl Measured {
-    fn new(atoms: usize, side: f64) -> Measured {
-        Measured {
-            atoms,
-            side,
-            times: 0,
-            temperature: 0.0,
-            potential: 0.0,
-            energy: None,
-            distances: vec![0; ((side / 2.0).min(FARTHEST) / BIN) as usize],
-        }
-    }
-
-    fn take(&mut self, pos: &Value, temperature: f64, potential: f64, kinetic: f64) {
-        self.times += 1;
-        self.temperature += temperature;
-        self.potential += potential;
-        let energy = potential + kinetic;
-        let (first, least, most) = self.energy.unwrap_or((energy, energy, energy));
-        self.energy = Some((first, least.min(energy), most.max(energy)));
-        for i in 0..self.atoms.min(COUNTED_FROM) {
-            for j in 0..self.atoms {
-                if i == j {
-                    continue;
-                }
-                let mut r2 = 0.0;
-                for k in 0..3 {
-                    let d = pos.data[3 * i + k] - pos.data[3 * j + k];
-                    let d = d - self.side * (d / self.side).round();
-                    r2 += d * d;
-                }
-                if let Some(bin) = self.distances.get_mut((r2.sqrt() / BIN) as usize) {
-                    *bin += 1;
-                }
-            }
-        }
-    }
-
-    fn print(&self) {
-        let (atoms, times) = (self.atoms as f64, self.times as f64);
-        let temperature = self.temperature / times;
-        println!(
-            "temperature         {temperature:.4}   ({:.1} K)",
-            temperature * EPSILON
-        );
-        println!(
-            "potential per atom  {:.4}  (pairs beyond {CUTOFF} left out, and zero at {CUTOFF})",
-            self.potential / times / atoms
-        );
-        if let Some((first, least, most)) = self.energy {
-            println!(
-                "energy per atom     {:.5}, kept within {:.1e} of itself",
-                first / atoms,
-                (most - least) / first.abs()
-            );
-        }
-
-        // How many atoms are at each distance from an atom, against how
-        // many there would be if they were spread evenly.
-        let per_volume = atoms / self.side.powi(3);
-        let counted_from = self.atoms.min(COUNTED_FROM) as f64;
-        let g: Vec<(f64, f64)> = self
-            .distances
-            .iter()
-            .enumerate()
-            .map(|(bin, found)| {
-                let (near, far) = (bin as f64 * BIN, (bin + 1) as f64 * BIN);
-                let shell = 4.0 / 3.0 * std::f64::consts::PI * (far.powi(3) - near.powi(3));
-                let even = counted_from * per_volume * shell * times;
-                ((near + far) / 2.0, *found as f64 / even)
-            })
-            .collect();
-        if let Some((r, most)) = g.iter().copied().max_by(|a, b| a.1.total_cmp(&b.1)) {
-            println!(
-                "g(r) is highest at  r = {r:.3} ({:.2} A), where it is {most:.2}\n",
-                r * SIGMA
-            );
-        }
-        println!("    r    r (A)    g(r)");
-        for (r, g) in g {
-            println!("{r:5.3}  {:7.3}  {g:6.3}  {}", r * SIGMA, "#".repeat((g * 12.0) as usize));
-        }
-    }
 }

@@ -5,8 +5,8 @@
 
 mod lj_energy;
 mod lj_forces;
-mod pairs;
+mod near;
 
 pub use lj_energy::lj_energy;
 pub use lj_forces::lj_forces;
-use pairs::pairs;
+use near::near_each;
