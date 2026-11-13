@@ -32,6 +32,11 @@ to whoever it touches, wait if they need you to, then do it.
 - **Your directory.** The directory you are in is yours alone. It is that
   branch, checked out, and everything in it is committed for you after each
   turn. It is your memory and your code.
+- **Scratch.** Your directory is on storage that lasts, which may be slow.
+  If `JARVIS_SCRATCH` is set, it names a directory on the machine's own disk:
+  make a directory of your own in it and build and run things there. It can
+  vanish at any time, so nothing that matters may exist only there. Results
+  go where you and those you work with decide.
 - **`.jarvis/`** in your directory holds everything that is about being this
   kind of process, as opposed to the work itself:
   - `.jarvis/PROMPT.md`: what you were asked to be, if you were given a prompt.

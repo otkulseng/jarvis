@@ -1159,6 +1159,7 @@ fn fact_text(fact: &Value) -> String {
         "kernel_error" => format!("PROBLEM: {}", clip(&text("error"), 300)),
         "kernel" => "a new kernel".to_string(),
         "up" => format!("is up (jarvis {})", text("version")),
+        "restored" => format!("STARTED FROM WHAT WAS LAST SAVED ({}): it did not stop cleanly, and what it did after that save is lost", text("from")),
         "closed" if text("kernel").is_empty() => "stopped".to_string(),
         "closed" => format!("{} is taken to be gone (said {})", text("kernel"), text("by")),
         "link_up" => format!("linked to {}", text("kernel")),

@@ -83,22 +83,32 @@ pub enum Cmd {
         address of every process it hosts (`lammps@NAME`) and of their branches, so \
         it must be different from every kernel this one will ever be linked to or \
         share a repository with, also ones that are gone. Starting a kernel again \
-        under its name carries on where it stopped. A name whose kernel lost its own \
-        directory cannot be taken again: choose a new one.\n\n\
+        under its name carries on from its database in the store, on any machine \
+        that has the store. A name whose database is gone from the store cannot be \
+        taken again: choose a new one.\n\n\
         What a kernel uses:\n\
         \x20 the repository   all code, as git branches: the one you are in, or --repo.\n\
         \x20                  Many kernels can share one.\n\
-        \x20 its own state    its database and its processes' working directories: --state,\n\
-        \x20                  or `.jarvis/kernel/NAME` in the repository.\n\
+        \x20 the store        what lasts: $JARVIS_STORE, or `.jarvis` in the repository.\n\
+        \x20                  Each kernel has its database there (`kernel/NAME/kernel.db`:\n\
+        \x20                  the only one there is, and what a kernel starts from) and\n\
+        \x20                  its processes' directories (`kernel/NAME/proc/`).\n\
+        \x20 scratch          $JARVIS_SCRATCH, if set: a directory on the machine's own\n\
+        \x20                  disk, which may vanish. The kernel then works on a copy of\n\
+        \x20                  its database there and saves it to the store when something\n\
+        \x20                  changed: every $JARVIS_CHECKPOINT_SECONDS (60 if not set),\n\
+        \x20                  and when it stops. Set it where the store is on network\n\
+        \x20                  storage. Not set, the kernel works in the store directly.\n\
         \x20 its socket       where commands reach it: `NAME.sock` in $JARVIS_RUN, or in\n\
         \x20                  `/tmp/jarvis-<uid>`. `jarvis` must look in the same place.\n\n\
         Ctrl-C, or the signal TERM to its process (`jarvis kernels` shows which), \
         stops it, together with every service and every turn in progress. Nothing is lost: messages that were being worked on are \
         given again, marked as such, the next time it runs. The same holds if it is \
-        killed. Nothing starts a kernel again by itself.")]
+        killed, except with scratch: then it starts from what was last saved, and \
+        what it did after that is lost. Nothing starts a kernel again by itself.")]
     #[command(after_long_help = "Examples:\n\
         \x20 jarvis up laptop\n\
-        \x20 jarvis up cannon-sweep --repo /n/proj/jarvis --state /scratch/$USER/jarvis/cannon-sweep\n\
+        \x20 JARVIS_STORE=/n/proj/jarvis-store JARVIS_SCRATCH=/tmp/$USER/jarvis jarvis up cannon-sweep --repo /n/proj/jarvis\n\
         \x20 jarvis up laptop 2> kernel.log     # what happens is printed on standard error")]
     Up(Up),
 
@@ -424,11 +434,6 @@ pub struct Up {
     /// The git repository that holds the code [default: the one this directory is in]
     #[arg(long, value_name = "DIR")]
     pub repo: Option<String>,
-
-    /// Where this kernel keeps its own database and its processes' working
-    /// directories [default: .jarvis/kernel/NAME in the repository]
-    #[arg(long, value_name = "DIR")]
-    pub state: Option<String>,
 }
 
 #[derive(Args)]

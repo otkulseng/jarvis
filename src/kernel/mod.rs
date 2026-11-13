@@ -59,6 +59,7 @@ use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Write};
+use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -90,15 +91,30 @@ pub struct Config {
     pub name: String,
     pub identity: String,
     pub repo: Repo,
-    /// The kernel's own directory: its database, its processes' directories.
+    /// The kernel's directory in the store: its database as it lasts, and
+    /// its processes' directories.
     pub state: PathBuf,
+    /// Where the kernel works on its database: `state` itself, or the
+    /// kernel's directory in $JARVIS_SCRATCH.
+    pub work: PathBuf,
     /// Where the kernels of this machine put their sockets.
     pub run_dir: PathBuf,
 }
 
 impl Config {
+    /// The database the kernel works on.
     pub fn db_path(&self) -> PathBuf {
+        self.work.join("kernel.db")
+    }
+
+    /// The database in the store: the one a kernel starts from.
+    pub fn kept_db(&self) -> PathBuf {
         self.state.join("kernel.db")
+    }
+
+    /// The kernel works on a copy, which is saved to the store as it goes.
+    pub fn saves(&self) -> bool {
+        self.work != self.state
     }
 
     /// The working directory of a process: a checkout of its branch.
@@ -132,6 +148,40 @@ pub fn run_dir() -> PathBuf {
 
 /// The harness of a process that has no agent: its code deals with its mail.
 pub const NO_AGENT: &str = "none";
+
+/// A directory named by a variable of the environment, if it is set.
+fn dir_from_env(name: &str, here: &Path) -> Option<PathBuf> {
+    std::env::var(name).ok().filter(|dir| !dir.is_empty()).map(|dir| here.join(dir))
+}
+
+/// How often a kernel that works in $JARVIS_SCRATCH saves its database to
+/// the store: $JARVIS_CHECKPOINT_SECONDS, or every minute.
+fn save_every() -> Duration {
+    let seconds = std::env::var("JARVIS_CHECKPOINT_SECONDS").ok().and_then(|s| s.parse::<f64>().ok()).filter(|s| *s > 0.0);
+    Duration::from_secs_f64(seconds.unwrap_or(60.0))
+}
+
+/// How far a kernel that lost its latest work skips ahead in its numbering,
+/// so that no number it gave out after its last save is given out again.
+const SKIPPED: i64 = 10_000_000;
+
+/// Write a whole, consistent copy of a database, which may be in use, to
+/// `to`. `to` is the complete copy afterwards, or what it was before.
+fn copy_db(db: &Connection, to: &Path) -> Res<()> {
+    let unfinished = to.with_extension("db.copying");
+    let _ = fs::remove_file(&unfinished);
+    db.execute("VACUUM INTO ?1", [unfinished.to_string_lossy().as_ref()])?;
+    File::open(&unfinished)?.sync_all()?;
+    fs::rename(&unfinished, to)?;
+    Ok(())
+}
+
+/// The same, of a database that is opened for it.
+fn copy_db_at(from: &Path, to: &Path) -> Res<()> {
+    let db = Connection::open(from)?;
+    db.busy_timeout(Duration::from_secs(15))?;
+    copy_db(&db, to)
+}
 
 /// What the kernel shares with the threads that answer commands.
 pub struct Shared {
@@ -364,6 +414,13 @@ pub struct Kernel {
     dirty: bool,
     /// The newest record already printed on standard error.
     printed: i64,
+    /// Saving the database to the store: when it was last begun and what had
+    /// changed by then, whether a save is going on, and whether one failed.
+    last_save: Instant,
+    saved_changes: u64,
+    saving: Arc<AtomicBool>,
+    save_failed: Arc<AtomicBool>,
+    save_every: Duration,
     live: HashMap<String, Live>,
     links: HashMap<u64, Link>,
     dials: HashMap<String, Dial>,
@@ -433,8 +490,12 @@ pub fn up(args: cli::Up) -> Res<()> {
     let here = std::env::current_dir()?;
     let absolute = |text: &str| -> PathBuf { here.join(text) };
     let repo = Repo::find(&args.repo.as_deref().map(absolute).unwrap_or(here.clone()))?;
-    let state = args.state.as_deref().map(absolute).unwrap_or_else(|| repo.root.join(".jarvis/kernel").join(&name));
-    for dir in [state.join("proc"), state.join("log")] {
+    // The store holds what lasts: this kernel's database and its processes'
+    // code. Scratch, if there is one, is where the kernel works.
+    let store = dir_from_env("JARVIS_STORE", &here).unwrap_or_else(|| repo.root.join(".jarvis"));
+    let state = store.join("kernel").join(&name);
+    let work = dir_from_env("JARVIS_SCRATCH", &here).map(|scratch| scratch.join("kernel").join(&name)).unwrap_or_else(|| state.clone());
+    for dir in [state.join("proc"), state.join("log"), work.clone()] {
         fs::create_dir_all(&dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
     }
     // What the kernel keeps inside the repository's directory is not code.
@@ -447,10 +508,26 @@ pub fn up(args: cli::Up) -> Res<()> {
         let _ = fs::set_permissions(&run_dir, fs::Permissions::from_mode(0o700));
     }
 
-    let db = index::open(&state.join("kernel.db"))?;
+    let socket = run_dir.join(format!("{name}.sock"));
+    if UnixStream::connect(&socket).is_ok() {
+        return Err(format!("a kernel called `{name}` is already running on this machine (its socket is {})", socket.display()).into());
+    }
+    let kept = state.join("kernel.db");
+    if work != state {
+        // The database in the store is the only one there is. Whatever an
+        // earlier run left in scratch is not looked at.
+        for left in ["kernel.db", "kernel.db-wal", "kernel.db-shm", "kernel.db.copying"] {
+            let _ = fs::remove_file(work.join(left));
+        }
+        if kept.exists() {
+            copy_db_at(&kept, &work.join("kernel.db"))
+                .map_err(|e| format!("could not copy the database of `{name}` from the store ({}) to scratch ({}): {e}", kept.display(), work.display()))?;
+        }
+    }
+    let db = index::open(&work.join("kernel.db"))?;
     match index::get_meta(&db, "name")? {
         Some(was) if was != name => {
-            return Err(format!("{} is the directory of the kernel `{was}`, not of `{name}`", state.display()).into());
+            return Err(format!("{} is the database of the kernel `{was}`, not of `{name}`", kept.display()).into());
         }
         _ => index::set_meta(&db, "name", &name)?,
     }
@@ -462,12 +539,21 @@ pub fn up(args: cli::Up) -> Res<()> {
     // it. That refuses a second kernel of the same name.
     repo.claim(&name, &identity)?;
     index::set_meta(&db, "identity", &identity)?;
+    // A kernel that works on a copy and did not stop cleanly has lost what
+    // it did after its last save. Others may have seen the numbers it gave
+    // out since, so it carries on well past them.
+    let lost_some = work != state && index::get_meta(&db, "running")?.as_deref() == Some("yes");
+    index::set_meta(&db, "running", "yes")?;
+    if lost_some {
+        db.execute("UPDATE sqlite_sequence SET seq = seq + ?1 WHERE name = 'records'", [SKIPPED])?;
+    }
 
     let cfg = Arc::new(Config {
         name: name.clone(),
         identity,
         repo,
         state,
+        work,
         run_dir,
     });
     fs::write(cfg.guide(), include_str!("../../GUIDE.md"))?;
@@ -478,6 +564,7 @@ pub fn up(args: cli::Up) -> Res<()> {
     serve::listen(cfg.clone(), tx.clone(), shared.clone())?;
 
     let next_n: i64 = db.query_row("SELECT COALESCE(MAX(n), 0) + 1 FROM records WHERE k = ?1", [&name], |r| r.get(0))?;
+    let next_n = next_n + if lost_some { SKIPPED } else { 0 };
     let printed: i64 = db.query_row("SELECT COALESCE(MAX(seq), 0) FROM records", [], |r| r.get(0))?;
     let mut kernel = Kernel {
         cfg,
@@ -489,6 +576,11 @@ pub fn up(args: cli::Up) -> Res<()> {
         next_n,
         dirty: false,
         printed,
+        last_save: Instant::now(),
+        saved_changes: 0,
+        saving: Arc::new(AtomicBool::new(false)),
+        save_failed: Arc::new(AtomicBool::new(false)),
+        save_every: save_every(),
         live: HashMap::new(),
         links: HashMap::new(),
         dials: HashMap::new(),
@@ -506,6 +598,16 @@ pub fn up(args: cli::Up) -> Res<()> {
     if new {
         let identity = kernel.cfg.identity.clone();
         kernel.rec(&at(KERNEL, &kernel.me.clone()), "kernel", json!({"identity": identity, "version": cli::VERSION}))?;
+    }
+    if lost_some {
+        kernel.rec(&at(KERNEL, &kernel.me.clone()), "restored", json!({"from": kernel.cfg.kept_db()}))?;
+    }
+    if kernel.cfg.saves() {
+        // In the store from its first moment: a kernel that is lost before
+        // its first save would otherwise have spent its name.
+        let kept = kernel.cfg.kept_db();
+        copy_db(&kernel.db, &kept).map_err(|e| format!("could not save the database of `{}` to the store ({}): {e}", kernel.me, kept.display()))?;
+        kernel.saved_changes = kernel.db.total_changes();
     }
     kernel.run()
 }
@@ -574,11 +676,16 @@ impl Kernel {
             }
         });
         eprintln!(
-            "jarvis: kernel `{}` is up (jarvis {}). Code in {}, its own state in {}, its socket in {}. Ctrl-C stops it.",
+            "jarvis: kernel `{}` is up (jarvis {}). Code in {}, what it keeps in {}, {}, its socket in {}. Ctrl-C stops it.",
             self.me,
             cli::VERSION,
             self.cfg.repo.root.display(),
             self.cfg.state.display(),
+            if self.cfg.saves() {
+                format!("working in {} and saving every {:?}", self.cfg.work.display(), self.save_every)
+            } else {
+                "working there directly".to_string()
+            },
             self.cfg.run_dir.display()
         );
         let me = self.addr(KERNEL);
@@ -689,11 +796,54 @@ impl Kernel {
         let me = self.addr(KERNEL);
         self.note(&me, "closed", json!({}));
         let _ = fs::remove_file(self.cfg.run_dir.join(format!("{}.sock", self.me)));
+        // It stopped cleanly: what is in the store is everything.
+        let _ = index::set_meta(&self.db, "running", "no");
+        if self.cfg.saves() {
+            let began = Instant::now();
+            while self.saving.load(Ordering::SeqCst) && began.elapsed() < Duration::from_secs(60) {
+                thread::sleep(Duration::from_millis(50));
+            }
+            let kept = self.cfg.kept_db();
+            match copy_db(&self.db, &kept) {
+                Ok(()) => eprintln!("jarvis: saved to {}", kept.display()),
+                Err(e) => eprintln!(
+                    "jarvis: COULD NOT SAVE the database to {}: {e}. The store has it as it last was saved; the latest is in {} as long as that exists.",
+                    kept.display(),
+                    self.cfg.db_path().display()
+                ),
+            }
+        }
+    }
+
+    /// A kernel that works on a copy saves it to the store now and then, if
+    /// anything changed. The copying is done on the side.
+    fn save_if_due(&mut self, now: Instant) {
+        if !self.cfg.saves() || self.saving.load(Ordering::SeqCst) {
+            return;
+        }
+        let failed = self.save_failed.swap(false, Ordering::SeqCst);
+        let changes = self.db.total_changes();
+        if now.duration_since(self.last_save) < self.save_every || (changes == self.saved_changes && !failed) {
+            return;
+        }
+        self.last_save = now;
+        self.saved_changes = changes;
+        self.saving.store(true, Ordering::SeqCst);
+        let (from, to) = (self.cfg.db_path(), self.cfg.kept_db());
+        let (saving, save_failed) = (self.saving.clone(), self.save_failed.clone());
+        thread::spawn(move || {
+            if let Err(e) = copy_db_at(&from, &to) {
+                eprintln!("jarvis: could not save the database to {}: {e}. It is tried again.", to.display());
+                save_failed.store(true, Ordering::SeqCst);
+            }
+            saving.store(false, Ordering::SeqCst);
+        });
     }
 
     /// The clock: what waits for a time and not for an event.
     fn tick(&mut self) {
         let now = Instant::now();
+        self.save_if_due(now);
         // Mail whose turn failed is offered again after its pause.
         let due: Vec<String> = self.live.iter().filter(|(_, l)| l.retry_at.is_some_and(|at| now >= at)).map(|(name, _)| name.clone()).collect();
         for name in due {

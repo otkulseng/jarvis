@@ -107,16 +107,39 @@ everything it hosts, so no other kernel may ever have it.
 
 Where things are kept (`jarvis help up`):
 
-| What | Default | On a cluster |
+| What | Where | On a cluster |
 |---|---|---|
 | The repository | the one `jarvis up` is run in | network storage |
-| A kernel's own state | `.jarvis/kernel/NAME` in it | see below |
-| Sockets | `/tmp/jarvis-<uid>`, or `$JARVIS_RUN` | the node's own disk |
+| The store | `$JARVIS_STORE`, or `.jarvis` in the repository | network storage |
+| Scratch | `$JARVIS_SCRATCH`; not set by default | the node's own disk |
+| Sockets | `$JARVIS_RUN`, or `/tmp/jarvis-<uid>` | the node's own disk |
 
-A kernel that loses its state cannot come back under its name. On a machine
-whose disk stays, that never happens. On a compute node it does when the job
-ends, unless the state is put somewhere that stays. Doing that properly is
-checkpointing, which is not built yet (`ROADMAP.md`).
+**The store is the memory of the system.** For every kernel that has run it
+holds `kernel/NAME/kernel.db`, the kernel's database, and `kernel/NAME/proc/`,
+its processes' directories (their code, each a git checkout with one writer).
+There is one database per kernel, and `jarvis up NAME` always starts from it:
+on the machine it ran on before or on any other that has the store. To start
+afresh under a name, that file must be deleted by hand.
+
+**Scratch is for working.** Without it, a kernel works on its database in the
+store directly: one file, nothing copied. That is right on a laptop. Where
+the store is on network storage, set `$JARVIS_SCRATCH` to a directory on the
+node's own disk. The kernel then works on a copy there and saves it whole to
+the store whenever something changed: every `$JARVIS_CHECKPOINT_SECONDS` (60
+if not set), and when it stops. Scratch may vanish at any time, and whatever
+is in it at start is not looked at.
+
+| How a kernel ends | Without scratch | With scratch |
+|---|---|---|
+| Stopped (Ctrl-C, TERM) | nothing lost | nothing lost |
+| Killed, or its node is lost | nothing lost | what it did after its last save is lost |
+
+A kernel that starts from a save older than its last moments skips ahead in
+its numbering, so that no message or record gets a number that was given out
+before. Messages on their way to it that it had not confirmed are sent again
+by the kernels that hold them.
+
+`sh tests/checkpoint.sh` runs all of this.
 
 ## A process's code
 

@@ -33,42 +33,42 @@ in advance.
 On a machine whose disk does not vanish (a laptop, a virtual machine), the
 runtime is all that is needed.
 
-## Part 2: Checkpointing (designed next, not built)
+## Part 2: The store (built, except as said below)
 
-**What it is for.** On a cluster, a kernel runs on a compute node whose disk
-is gone when the job ends or the node fails. Checkpointing saves what the
-kernel knows to storage that outlives the node.
+**What it is.** `JARVIS_STORE` is the memory of the system. It holds the
+database of every kernel that has run, and the code of its processes. A
+kernel has one database, the one in the store, and always starts from it.
+This is never optional: it is also where the data is when a run is over.
 
-**The goal.** A kernel whose disk is lost can be started again, somewhere
-else, under its own name, and carry on with its processes and its waiting
-mail. The rest of the system notices only a pause. Today such a kernel's name
-is spent and its processes are carried on by hand from their branches.
+**Scratch.** A kernel's database must be on the machine's own disk to be
+fast. Where the store is on network storage, `JARVIS_SCRATCH` names such a
+disk: the kernel works on a copy there and saves it whole to the store when
+something changed, at an interval and when it stops. On a laptop it is not
+set, and the kernel works in the store directly.
 
-**What it is not.** It is not how kernels learn about each other, and the
-runtime never reads checkpoints to answer questions. (An earlier version had
-kernels write logs to a shared directory and read each other's logs from it.
-That mixed backup with visibility, made kernels poll the file system, and
-could not work between sites. It was removed.)
+**What may be lost.** A kernel with scratch that is killed loses what it did
+after its last save. That is accepted: messages are carried by flux and the
+like and need not outlive everything, the agents' work is in git, and their
+conversations are kept (below).
 
-**It is optional and per kernel**: switched on where a disk can vanish.
+**It is not how kernels learn about each other.** The runtime never reads
+another kernel's database to answer a question.
 
-**The hard point, to be solved in the design.** A kernel confirms to its
-neighbour that it has a message, and the neighbour then forgets it. If the
-kernel dies after confirming and before its next checkpoint, that message is
-lost. So with checkpointing on, a kernel may confirm only what is already in
-a checkpoint. The question is how to do that without slowing every message
-to the speed of network storage.
+**Not built yet:**
 
-**What can be reused.** The file handling of the removed log store (git
-history, `src/store.rs` at 429fc29): a kernel's records are numbered without
-gaps, files are named by the records they hold and never changed, and anyone
-can compact them at any time with no locks, by file names alone:
-write `records-N.db`, give it its name only if the name is free, delete what
-it covers.
-
-**Also to decide then**: what besides records belongs in a checkpoint
-(waiting mail, messages on their way, the steps agents take inside turns),
-and how often it is taken, which is a tuning question.
+- **The agents' conversations in the store** (`JARVIS_STORE/claude`), so that
+  `name@kernel` carries on with its context when its kernel starts on another
+  machine. Claude Code can keep everything it has in a chosen directory, but
+  its login moves with it, so this needs a login by token in the kernel's
+  environment (`claude setup-token`). The session's id can be computed from
+  the address.
+- **Reading a kernel that is not running.** Its database is in the store, and
+  no command reads it there.
+- **One kernel name in two places.** Nothing stops a kernel being started on
+  a second machine while it still runs on the first. Each machine guards its
+  own. With one kernel per flux broker, flux does.
+- **A database too big to copy whole.** Agents cannot make it so (about 55 KB
+  per dollar of their work). Messages sent by code at a high rate can.
 
 ## Part 3: Big file storage (later)
 
