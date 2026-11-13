@@ -274,6 +274,7 @@ fn run(ctx: &Ctx, request: &Value, out: &mut dyn Out) -> Res<i32> {
 
     match command {
         Cmd::Up(_) => Err("`jarvis up` starts a kernel; it is not something a kernel is asked to do".into()),
+        Cmd::Harness(_) => Err("`jarvis harness` is run by a kernel, for a turn; it is not something a kernel is asked to do".into()),
         Cmd::Spawn(args) => {
             let (_, kernel) = index::address(&args.address, "process")?;
             if kernel != ctx.me {

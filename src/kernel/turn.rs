@@ -86,12 +86,21 @@ fn run_handle(job: &Job, conn: Option<&Connection>, mail: &Mail) -> Handled {
     }
 }
 
+/// What is said when a process is to have a kind of agent there is none of.
+pub(super) fn no_such_harness(name: &str) -> String {
+    format!(
+        "this jarvis cannot run an agent of the kind `{name}`. It can run: {}. Or give `--harness {NO_AGENT}`, for a process whose code is all there is",
+        crate::harness::AGENTS
+    )
+}
+
 fn run_agent(job: &Job, conn: Option<&Connection>, prompt: &str) -> Result<Value, String> {
     let Some(harness) = &job.harness else { return Err("it has no agent".into()) };
-    if !is_executable(harness) {
-        return Err(format!("there is no harness adapter at {}. Add one, or make this process again with another --harness", harness.display()));
+    if !crate::harness::known(harness) {
+        return Err(no_such_harness(harness));
     }
-    let mut command = Command::new(harness);
+    let mut command = Command::new(&job.exe);
+    command.args(["harness", harness]);
     command.env("JARVIS_SESSION", job.session.as_deref().unwrap_or(""));
     if let Some(dir) = &job.agent_dir {
         command.env("JARVIS_AGENT_DIR", dir);

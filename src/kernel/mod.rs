@@ -30,8 +30,9 @@
 //!                    not mine, give it to the agent. Anything else: failed,
 //!                    give it to the agent with the error output.
 //!
-//! The agent is started through a harness adapter, `harness/<name>` in the
-//! repository: it gets the prompt on standard input, runs in the process's
+//! The agent is started through a harness adapter, which is this program
+//! run once more (`jarvis harness <name>`, see `harness.rs`), so nothing in
+//! a checkout is read: it gets the prompt on standard input, runs in the process's
 //! directory, and prints JSON objects, one per line. A line with a `step`
 //! key is something the agent did, and is noted at once. The last line,
 //! {"session", "reply", ...}, is how the turn ended.
@@ -101,6 +102,8 @@ pub struct Config {
     pub work: PathBuf,
     /// Where the kernels of this machine put their sockets.
     pub run_dir: PathBuf,
+    /// This program, as it was when the kernel started.
+    pub exe: PathBuf,
 }
 
 impl Config {
@@ -132,9 +135,9 @@ impl Config {
         self.state.join("log").join(format!("{name}.run.log"))
     }
 
-    /// The adapter that runs a process's agent; none for a process without one.
-    fn harness(&self, name: &str) -> Option<PathBuf> {
-        (name != NO_AGENT).then(|| self.repo.root.join("harness").join(name))
+    /// The kind of agent a process has; none for a process without one.
+    fn harness(&self, name: &str) -> Option<String> {
+        (name != NO_AGENT).then(|| name.to_string())
     }
 
     /// Where a harness keeps what the agent of a process must have again at
@@ -332,8 +335,10 @@ struct Job {
     kernel: String,
     dir: PathBuf,
     db_path: PathBuf,
-    /// The adapter that runs its agent; none if it has no agent.
-    harness: Option<PathBuf>,
+    /// The kind of agent it has (see `harness.rs`); none if it has no agent.
+    harness: Option<String>,
+    /// This program, which is run once more as the adapter for that agent.
+    exe: PathBuf,
     /// Where that adapter keeps what must last between turns.
     agent_dir: Option<PathBuf>,
     session: Option<String>,
@@ -568,6 +573,7 @@ pub fn up(args: cli::Up) -> Res<()> {
         state,
         work,
         run_dir,
+        exe: std::env::current_exe().map_err(|e| format!("could not find out where this program is: {e}"))?,
     });
     fs::write(cfg.guide(), include_str!("../../GUIDE.md"))?;
 

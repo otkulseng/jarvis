@@ -44,14 +44,16 @@ there is and how to use it.
 - **`GUIDE.md`**: what every agent is told about being a jarvis process. It
   holds the ideas; how to use the command is in the command's own help, which
   agents are shown too.
-- **`harness/`**: one adapter per agent harness. `harness/claude` runs Claude
-  Code and decides what its agents may do: by default, edit their own
+- **Agents** are part of `jarvis` itself: installing the program is all it
+  takes, and no file in any checkout is read to run one. `src/harness.rs` has
+  one adapter per kind of agent. The one for Claude Code decides what its
+  agents may do: by default, edit their own
   directory, use `jarvis`, use all of git, and search the web. A process adds
   the tools its own work needs (`npm`, `cargo`, `sbatch`) in
   `.jarvis/claude.json` in its directory, which is part of its expert. A
   process can also have no agent (`--harness none`): then its code is all.
-  The top of `harness/claude` says what the kernel gives an adapter and what
-  it must print: that is all another harness has to do.
+  The top of `src/harness.rs` says what the kernel gives an adapter and what
+  it must print: that is all another kind of agent has to do.
 - **The page** is not here. It is an expert, the branch `page`: an Axum
   server with a Svelte and TypeScript page. Nothing on `main` knows about it.
 

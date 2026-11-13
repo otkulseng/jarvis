@@ -9,3 +9,4 @@ ctrlc = { version = "3.5.2", features = ["termination"] }
 rusqlite = { version = "0.41.1", features = ["bundled"] }
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
 libc = "0.2"
+uuid = { version = "1", features = ["v5"] }

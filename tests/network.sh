@@ -1,6 +1,7 @@
 #!/bin/sh
 # A network of three kernels on this machine, a - b - c, and what must hold
-# in it. No agent is run: tests/harness/echo answers every message.
+# in it. No agent is run: the harness `echo`, which is for tests, answers
+# every message.
 #
 #   deliver  a message crosses kernels that are not linked directly; while
 #            the kernel in the middle is killed again and again, every
@@ -26,15 +27,14 @@ cargo build --quiet --manifest-path "$here/Cargo.toml"
 work=$(mktemp -d /tmp/jv-XXXXXX)
 export JARVIS_RUN="$work/run" PATH="$here/target/debug:$PATH"
 unset JARVIS_KERNEL JARVIS_ID || true
-mkdir -p "$work/run" "$work/repo/harness"
-cp "$here/tests/harness/echo" "$work/repo/harness/echo"
+mkdir -p "$work/run" "$work/repo"
 cd "$work/repo"
 git init -q -b main .
 git add -A
-git -c user.name=test -c user.email=test@example.com commit -q -m "a repository for the test"
+git -c user.name=test -c user.email=test@example.com commit -q --allow-empty -m "a repository for the test"
 # An expert whose processes need no agent: its code answers.
 git checkout -q --orphan probe
-git rm -rf -q .
+git rm -rf -q --ignore-unmatch .
 mkdir .jarvis
 cp "$here/tests/harness/probe-handle" .jarvis/handle
 chmod +x .jarvis/handle

@@ -18,12 +18,11 @@ cargo build --quiet --manifest-path "$here/Cargo.toml"
 work=$(mktemp -d /tmp/jv-XXXXXX)
 export JARVIS_RUN="$work/run" PATH="$here/target/debug:$PATH"
 unset JARVIS_KERNEL JARVIS_ID || true
-mkdir -p "$work/run" "$work/repo/harness"
-cp "$here/tests/harness/echo" "$work/repo/harness/echo"
+mkdir -p "$work/run" "$work/repo"
 cd "$work/repo"
 git init -q -b main .
 git add -A
-git -c user.name=test -c user.email=test@example.com commit -q -m "a repository for the test"
+git -c user.name=test -c user.email=test@example.com commit -q --allow-empty -m "a repository for the test"
 
 on() { k=$1; shift; JARVIS_KERNEL=$k jarvis "$@"; }
 as() { who=$1; shift; JARVIS_KERNEL=${who#*@} JARVIS_ID=$who jarvis "$@"; }

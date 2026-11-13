@@ -205,6 +205,7 @@ impl Kernel {
             dir: dir.to_path_buf(),
             db_path: self.cfg.db_path(),
             harness: self.cfg.harness(&proc.harness),
+            exe: self.cfg.exe.clone(),
             agent_dir,
             session: proc.session.clone(),
             env: self.proc_env(name),
@@ -429,6 +430,9 @@ impl Kernel {
         let addr = args.address.clone();
         let branch = addr.clone();
         let no_agent = args.harness == NO_AGENT;
+        if !no_agent && !crate::harness::known(&args.harness) {
+            return Err(turn::no_such_harness(&args.harness).into());
+        }
         if let Some(existing) = self.find(name)? {
             if existing.status == "alive" {
                 return Err(format!("`{addr}` is already running; a kernel runs a name once (`jarvis ps {addr}` shows it)").into());
@@ -547,16 +551,8 @@ impl Kernel {
             self.tell(&addr, &hello)?;
         }
         let mut notes: Vec<String> = start_note.into_iter().collect();
-        match self.cfg.harness(&args.harness) {
-            Some(adapter) if !is_executable(&adapter) => notes.push(format!(
-                "there is no harness adapter `harness/{}` in {}, so its agent cannot run until there is",
-                args.harness,
-                self.cfg.repo.root.display()
-            )),
-            None if !is_executable(&dir.join(".jarvis/handle")) => {
-                notes.push(format!("`{addr}` has no agent and no `.jarvis/handle`, so nothing reads its messages: each comes back to its sender as not read"))
-            }
-            _ => {}
+        if no_agent && !is_executable(&dir.join(".jarvis/handle")) {
+            notes.push(format!("`{addr}` has no agent and no `.jarvis/handle`, so nothing reads its messages: each comes back to its sender as not read"));
         }
         if blank && !no_agent {
             notes.push(format!("`{addr}` is blank: it does nothing until it gets a message (`jarvis send {addr} ...`)"));

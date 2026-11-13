@@ -116,6 +116,9 @@ pub enum Cmd {
         \x20 JARVIS_STORE=/n/proj/jarvis-store JARVIS_SCRATCH=/tmp/$USER/jarvis jarvis up cannon-sweep --repo /n/proj/jarvis\n\
         \x20 jarvis up laptop 2> kernel.log     # what happens is printed on standard error")]
     Up(Up),
+    /// Run one turn of an agent. A kernel does this; it is not for people
+    #[command(hide = true)]
+    Harness(Harness),
 
     /// The kernels this one has heard of, and whether each can be reached
     #[command(long_about = "The kernels this one has heard of, and whether each can be reached.\n\n\
@@ -504,9 +507,12 @@ pub struct Spawn {
               at that moment.")]
     pub from: Option<String>,
 
-    /// Which agent harness runs it: the name of a file in `harness/`, or `none`
+    /// Which kind of agent runs it: `claude`, or `none`
     #[arg(long, value_name = "NAME", default_value = "claude",
-          long_help = "Which agent harness runs it: the name of a file in `harness/`, or `none`.\n\n\
+          long_help = "Which kind of agent runs it: `claude` (Claude Code), or `none`.\n\n\
+              An agent keeps what it remembers from turn to turn in the store, under its \
+              address, so it carries on wherever its kernel runs. A Claude agent needs the \
+              kernel to have been started with $CLAUDE_CODE_OAUTH_TOKEN (`jarvis help up`).\n\n\
               With `none` the process has no agent. Its code deals with its messages \
               (`.jarvis/handle`), and it is never sent notices meant for an agent. A message \
               its code does not take goes back to whoever sent it, as not read.")]
@@ -684,4 +690,10 @@ pub struct Log {
     /// Print JSON instead of text
     #[arg(long)]
     pub json: bool,
+}
+
+#[derive(Args)]
+pub struct Harness {
+    /// Which kind of agent
+    pub name: String,
 }

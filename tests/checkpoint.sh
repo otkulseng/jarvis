@@ -25,8 +25,7 @@ work=$(mktemp -d /tmp/jv-XXXXXX)
 export JARVIS_RUN="$work/run" PATH="$here/target/debug:$PATH"
 export JARVIS_STORE="$work/store" JARVIS_CHECKPOINT_SECONDS=0.5
 unset JARVIS_KERNEL JARVIS_ID JARVIS_SCRATCH || true
-mkdir -p "$work/run" "$work/repo/harness"
-cp "$here/tests/harness/echo" "$work/repo/harness/echo"
+mkdir -p "$work/run" "$work/repo"
 cd "$work/repo"
 git init -q -b main .
 mkdir .jarvis

@@ -4,13 +4,16 @@
 //! `jarvis up NAME` is a kernel (`kernel/`). Every other command is sent, as
 //! it was typed, to a kernel on this machine over its socket, and what the
 //! kernel answers is printed (`serve.rs` is the other end). One thing is done
-//! right here instead: being the far end of a link (`link --stdio`).
+//! right here instead: being the far end of a link (`link --stdio`). And a
+//! kernel runs this program once more for each turn of an agent, as the
+//! adapter for that kind of agent (`harness.rs`).
 //!
 //! The commands and their help are defined in `cli.rs`.
 
 mod children;
 mod cli;
 mod git;
+mod harness;
 mod index;
 mod kernel;
 mod net;
@@ -57,6 +60,7 @@ fn run(cli: Cli) -> Res<i32> {
             return Ok(0);
         }
         Cmd::Link(args) if args.stdio => return bridge(args.kernel.as_deref()),
+        Cmd::Harness(args) => return Ok(harness::run(&args.name)),
         _ => {}
     }
 
