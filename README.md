@@ -87,7 +87,8 @@ src/        nary: symbols, nodes, dialects, map, run, get
 np/         a dialect of arrays: arithmetic with NumPy's rules for shapes, sums along
             an axis, comparison, constants, random numbers, values handed over by Rust
 md/         a dialect of molecular dynamics: Lennard-Jones forces and energy in a
-            periodic box
+            periodic box; and, around it, a velocity Verlet step written in np, a
+            lattice to start from, temperature, and g(r)
 examples/   argon.rs: liquid argon, after Rahman (1964)
             euler.rs: the smallest whole example, with a dialect of its own: a hundred
             steps written in np, mapped onto ten kernels
@@ -97,8 +98,11 @@ tests/      making a dialect, the arrays of np, md's kernels against the same in
 ```sh
 cargo test --workspace
 cargo run --release --example argon
+cargo run --release --features rayon --example argon -- 20000
 cargo run --example euler
 ```
+
+The feature `rayon` makes md's kernels use every core. They compute the same numbers, to the last digit, with and without it.
 
 Kernels run on the CPU, one after the other, on values the dialects define themselves. Derivatives are not implemented: a force is written by hand, as a symbol of its own. Neither is any choice between kernels other than the shortest graph.
 
@@ -106,6 +110,6 @@ Every `get` maps its graph from the beginning: nothing is kept from one `get` to
 
 ### Liquid argon
 
-`examples/argon.rs` is 864 Lennard-Jones atoms at 94.4 K and 1.374 g/cm³. The time step is written in np, and the forces are `md.lj_forces`. That symbol equals a sum over all pairs of atoms, in np. Its kernel looks only at atoms in neighbouring cells of the box: a different algorithm, which the tests hold against the sum written in np.
+`examples/argon.rs` is 864 Lennard-Jones atoms at 94.4 K and 1.374 g/cm³, or as many as it is told. The time step is written in np, and the forces are `md.lj_forces`. That symbol equals a sum over all pairs of atoms, in np. Its kernel looks only at atoms in neighbouring cells of the box: a different algorithm, which the tests hold against the sum written in np.
 
 Every hundred steps the program gets the atoms back, and Rust measures the temperature, rescales the velocities while the liquid settles, and counts distances for g(r). The first peak of g(r) comes out at 3.7 Å with a height of 2.8, to be held against Rahman's figure 2.
