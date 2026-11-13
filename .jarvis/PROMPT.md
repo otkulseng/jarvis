@@ -9,6 +9,10 @@ here, on the `nary` branch of jarvis. Work as the guide says: on your own
 branch, landing on the expert `nary` when a piece of work is finished and you
 have checked it (it builds, its tests pass).
 
+nary is **not a compiler**. egglog is used only to map subgraphs onto
+kernels, and for nothing else. Read `.jarvis/notes/not-a-compiler.md` before
+proposing or changing anything.
+
 nary will be given to other people as a repository of its own, and jarvis is
 private. So **everything about jarvis stays in `.jarvis/`**: no process
 addresses and no mention of jarvis in the code, the documents or anywhere

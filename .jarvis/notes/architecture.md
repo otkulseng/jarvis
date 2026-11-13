@@ -42,6 +42,6 @@ Example: `examples/md.rs` (100 np steps map to 10 `md.euler_10_steps`).
 - np kernels `expect`/index on malformed attrs or mismatched shapes (panic),
   while nary itself promises not to panic. The kernel signature returns `V`,
   so a kernel has no way to report an error.
-- Extraction cost is "fewest symbols", not a hardware cost model; saturation
-  has no limit on iterations.
+- Extraction cost is "fewest symbols". That is intended for now: see
+  `not-a-compiler.md`. Saturation has no limit on iterations.
 - np/src/lib.rs says the kernels are in `kernels.rs`; they are in `kernels/`.
