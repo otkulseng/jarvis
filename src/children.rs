@@ -25,9 +25,18 @@ const GRACE: Duration = Duration::from_secs(3);
 pub fn started(pid: u32) -> Option<String> {
     let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-    let got = unsafe { libc::proc_pidinfo(pid as libc::c_int, libc::PROC_PIDTBSDINFO, 0, &mut info as *mut _ as *mut libc::c_void, size) };
+    let got = unsafe {
+        libc::proc_pidinfo(
+            pid as libc::c_int,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            &mut info as *mut _ as *mut libc::c_void,
+            size,
+        )
+    };
     // A program that has ended but was not collected yet no longer counts.
-    (got == size && info.pbi_status != libc::SZOMB).then(|| format!("{}.{}", info.pbi_start_tvsec, info.pbi_start_tvusec))
+    (got == size && info.pbi_status != libc::SZOMB)
+        .then(|| format!("{}.{}", info.pbi_start_tvsec, info.pbi_start_tvusec))
 }
 
 #[cfg(target_os = "linux")]
@@ -66,7 +75,10 @@ pub fn signal(pid: u32, signal: libc::c_int) {
 /// Note a program the kernel has just started.
 pub fn track(conn: &Connection, pid: u32, proc: &str, kind: &str) {
     if let Some(since) = started(pid) {
-        let _ = conn.execute("INSERT OR REPLACE INTO children (pid, started, proc, kind) VALUES (?1, ?2, ?3, ?4)", params![pid, since, proc, kind]);
+        let _ = conn.execute(
+            "INSERT OR REPLACE INTO children (pid, started, proc, kind) VALUES (?1, ?2, ?3, ?4)",
+            params![pid, since, proc, kind],
+        );
     }
 }
 
@@ -77,10 +89,14 @@ pub fn untrack(conn: &Connection, pid: u32) {
 
 /// The tracked programs: all of them, or those of one process.
 pub fn tracked(conn: &Connection, proc: Option<&str>) -> Vec<(u32, String)> {
-    let Ok(mut stmt) = conn.prepare("SELECT pid, started FROM children WHERE ?1 IS NULL OR proc = ?1") else {
+    let Ok(mut stmt) =
+        conn.prepare("SELECT pid, started FROM children WHERE ?1 IS NULL OR proc = ?1")
+    else {
         return Vec::new();
     };
-    stmt.query_map([proc], |r| Ok((r.get(0)?, r.get(1)?))).map(|rows| rows.flatten().collect()).unwrap_or_default()
+    stmt.query_map([proc], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map(|rows| rows.flatten().collect())
+        .unwrap_or_default()
 }
 
 /// End a tracked program and everything it started: ask, wait a little, then
@@ -99,7 +115,10 @@ pub fn end(pid: u32, since: &str) {
 
 /// End several tracked programs at once and wait until they are gone.
 pub fn end_all(programs: Vec<(u32, String)>) {
-    let ending: Vec<_> = programs.into_iter().map(|(pid, since)| thread::spawn(move || end(pid, &since))).collect();
+    let ending: Vec<_> = programs
+        .into_iter()
+        .map(|(pid, since)| thread::spawn(move || end(pid, &since)))
+        .collect();
     for thread in ending {
         let _ = thread.join();
     }

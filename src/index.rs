@@ -102,16 +102,25 @@ fn prepare(conn: &Connection, what: &str) -> Res<()> {
     if version == VERSION {
         return Ok(());
     }
-    let tables: i64 = conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'", [], |r| r.get(0))?;
+    let tables: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'",
+        [],
+        |r| r.get(0),
+    )?;
     if version != 0 || tables != 0 {
         return Err(format!("{what} was made by a different version of jarvis and cannot be used by this one. Delete or move that kernel's directory, then start the kernel again.").into());
     }
-    conn.execute_batch(&format!("BEGIN; {SCHEMA} PRAGMA user_version = {VERSION}; COMMIT;"))?;
+    conn.execute_batch(&format!(
+        "BEGIN; {SCHEMA} PRAGMA user_version = {VERSION}; COMMIT;"
+    ))?;
     Ok(())
 }
 
 pub fn now_ms() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 /// `bytes` random bytes, as hexadecimal.
@@ -123,7 +132,9 @@ pub fn random_hex(bytes: usize) -> Res<String> {
 }
 
 pub fn get_meta(conn: &Connection, key: &str) -> Res<Option<String>> {
-    Ok(conn.query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0)).optional()?)
+    Ok(conn
+        .query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0))
+        .optional()?)
 }
 
 pub fn set_meta(conn: &Connection, key: &str, value: &str) -> Res<()> {
@@ -167,7 +178,12 @@ pub fn is_person(addr: &str) -> bool {
 /// branch name and of a file name.
 pub fn check_name(name: &str, what: &str) -> Res<()> {
     let plain = |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.');
-    if name.is_empty() || !name.chars().all(plain) || name.starts_with(['-', '.']) || name.ends_with('.') || name.contains("..") {
+    if name.is_empty()
+        || !name.chars().all(plain)
+        || name.starts_with(['-', '.'])
+        || name.ends_with('.')
+        || name.contains("..")
+    {
         return Err(format!("`{name}` cannot be the name of a {what}: use letters, digits, `-`, `_` and `.`, starting with a letter or digit").into());
     }
     Ok(())
@@ -207,7 +223,14 @@ pub fn insert(conn: &Connection, r: &Rec) -> Res<Option<i64>> {
 }
 
 fn ids(d: &Value, key: &str) -> Vec<String> {
-    d[key].as_array().map(|list| list.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default()
+    d[key]
+        .as_array()
+        .map(|list| {
+            list.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// What a record means for the database. The one place that decides.
@@ -220,7 +243,10 @@ fn apply(conn: &Connection, r: &Rec, seq: i64) -> Res<()> {
             "UPDATE procs SET busy = 0, busy_since = NULL, failures = COALESCE(?2, failures) WHERE addr = ?1",
             params![r.proc, failures],
         )?;
-        conn.execute("UPDATE messages SET status = 'pending' WHERE recipient = ?1 AND status = 'taken'", [&r.proc])?;
+        conn.execute(
+            "UPDATE messages SET status = 'pending' WHERE recipient = ?1 AND status = 'taken'",
+            [&r.proc],
+        )?;
         Ok(())
     };
     let handled = |key: &str| -> Res<()> {
@@ -232,13 +258,25 @@ fn apply(conn: &Connection, r: &Rec, seq: i64) -> Res<()> {
     match r.kind.as_str() {
         "up" => {
             // Whatever the kernel was in the middle of when it last stopped is over.
-            conn.execute("UPDATE procs SET busy = 0, busy_since = NULL, failures = 0", [])?;
-            conn.execute("UPDATE messages SET status = 'pending' WHERE status = 'taken'", [])?;
+            conn.execute(
+                "UPDATE procs SET busy = 0, busy_since = NULL, failures = 0",
+                [],
+            )?;
+            conn.execute(
+                "UPDATE messages SET status = 'pending' WHERE status = 'taken'",
+                [],
+            )?;
         }
         // Someone said they take another kernel to be gone.
         "closed" if !text("kernel").is_empty() => {
-            conn.execute("INSERT OR IGNORE INTO kernels (name) VALUES (?1)", [text("kernel")])?;
-            conn.execute("UPDATE kernels SET closed = 1, closed_by = ?2 WHERE name = ?1", params![text("kernel"), text("by")])?;
+            conn.execute(
+                "INSERT OR IGNORE INTO kernels (name) VALUES (?1)",
+                [text("kernel")],
+            )?;
+            conn.execute(
+                "UPDATE kernels SET closed = 1, closed_by = ?2 WHERE name = ?1",
+                params![text("kernel"), text("by")],
+            )?;
         }
         "spawn" => {
             conn.execute(
@@ -253,13 +291,19 @@ fn apply(conn: &Connection, r: &Rec, seq: i64) -> Res<()> {
             set_tags(conn, &r.proc, &d["tags"])?;
         }
         "stop" => {
-            conn.execute("UPDATE procs SET status = 'stopped' WHERE addr = ?1 AND status != 'removed'", [&r.proc])?;
+            conn.execute(
+                "UPDATE procs SET status = 'stopped' WHERE addr = ?1 AND status != 'removed'",
+                [&r.proc],
+            )?;
         }
         "start" => {
             conn.execute("UPDATE procs SET status = 'alive', failures = 0 WHERE addr = ?1 AND status != 'removed'", [&r.proc])?;
         }
         "remove" => {
-            conn.execute("UPDATE procs SET status = 'removed', busy = 0, busy_since = NULL WHERE addr = ?1", [&r.proc])?;
+            conn.execute(
+                "UPDATE procs SET status = 'removed', busy = 0, busy_since = NULL WHERE addr = ?1",
+                [&r.proc],
+            )?;
             conn.execute("DELETE FROM tags WHERE addr = ?1", [&r.proc])?;
             conn.execute("UPDATE messages SET status = 'dropped' WHERE recipient = ?1 AND status IN ('pending', 'taken')", [&r.proc])?;
         }
@@ -298,7 +342,10 @@ fn apply(conn: &Connection, r: &Rec, seq: i64) -> Res<()> {
             ])?;
         }
         "forward" => {
-            conn.execute("UPDATE messages SET status = 'forwarded' WHERE id = ?1 AND status = 'sent'", [text("message")])?;
+            conn.execute(
+                "UPDATE messages SET status = 'forwarded' WHERE id = ?1 AND status = 'sent'",
+                [text("message")],
+            )?;
         }
         "undeliverable" => {
             conn.execute(
@@ -312,7 +359,9 @@ fn apply(conn: &Connection, r: &Rec, seq: i64) -> Res<()> {
             let status = text("status");
             let open = match status {
                 "pending" => "('sent', 'forwarded')",
-                "handled" | "failed" | "dropped" | "undeliverable" => "('sent', 'forwarded', 'pending')",
+                "handled" | "failed" | "dropped" | "undeliverable" => {
+                    "('sent', 'forwarded', 'pending')"
+                }
                 _ => return Ok(()),
             };
             conn.execute(
@@ -322,11 +371,21 @@ fn apply(conn: &Connection, r: &Rec, seq: i64) -> Res<()> {
         }
         // This kernel carried out a request that was sent to it.
         "request_done" => {
-            let status = if d["code"].as_i64() == Some(0) { "handled" } else { "failed" };
-            conn.execute("UPDATE messages SET status = ?2, result = ?3 WHERE id = ?1", params![text("message"), status, text("result")])?;
+            let status = if d["code"].as_i64() == Some(0) {
+                "handled"
+            } else {
+                "failed"
+            };
+            conn.execute(
+                "UPDATE messages SET status = ?2, result = ?3 WHERE id = ?1",
+                params![text("message"), status, text("result")],
+            )?;
         }
         "turn_start" => {
-            conn.execute("UPDATE procs SET busy = 1, busy_since = ?2 WHERE addr = ?1", params![r.proc, r.at])?;
+            conn.execute(
+                "UPDATE procs SET busy = 1, busy_since = ?2 WHERE addr = ?1",
+                params![r.proc, r.at],
+            )?;
             for id in ids(d, "messages") {
                 conn.execute(
                     "UPDATE messages SET status = 'taken', attempts = attempts + 1 WHERE id = ?1 AND status IN ('sent', 'forwarded', 'pending')",
@@ -337,16 +396,25 @@ fn apply(conn: &Connection, r: &Rec, seq: i64) -> Res<()> {
         "handled_by_code" => {
             handled("messages")?;
             // Its code works (again).
-            conn.execute("UPDATE procs SET failures = 0 WHERE addr = ?1 AND harness = 'none'", [&r.proc])?;
+            conn.execute(
+                "UPDATE procs SET failures = 0 WHERE addr = ?1 AND harness = 'none'",
+                [&r.proc],
+            )?;
         }
         // It has no agent, and its code failed on what it got.
         "code_failed" => {
-            conn.execute("UPDATE procs SET failures = ?2 WHERE addr = ?1", params![r.proc, d["failures"].as_i64().unwrap_or(1)])?;
+            conn.execute(
+                "UPDATE procs SET failures = ?2 WHERE addr = ?1",
+                params![r.proc, d["failures"].as_i64().unwrap_or(1)],
+            )?;
         }
         "turn" => {
             handled("messages")?;
             if let Some(session) = d["session"].as_str() {
-                conn.execute("UPDATE procs SET session = ?2 WHERE addr = ?1", params![r.proc, session])?;
+                conn.execute(
+                    "UPDATE procs SET session = ?2 WHERE addr = ?1",
+                    params![r.proc, session],
+                )?;
             }
             turn_over(Some(0))?;
         }
@@ -358,11 +426,16 @@ fn apply(conn: &Connection, r: &Rec, seq: i64) -> Res<()> {
 }
 
 fn set_tags(conn: &Connection, addr: &str, tags: &Value) -> Res<()> {
-    let Some(tags) = tags.as_object() else { return Ok(()) };
+    let Some(tags) = tags.as_object() else {
+        return Ok(());
+    };
     for (key, value) in tags {
         let value = value.as_str().unwrap_or("");
         if value.is_empty() {
-            conn.execute("DELETE FROM tags WHERE addr = ?1 AND key = ?2", params![addr, key])?;
+            conn.execute(
+                "DELETE FROM tags WHERE addr = ?1 AND key = ?2",
+                params![addr, key],
+            )?;
         } else {
             conn.execute(
                 "INSERT INTO tags (addr, key, value) VALUES (?1, ?2, ?3) ON CONFLICT(addr, key) DO UPDATE SET value = excluded.value",
@@ -413,22 +486,32 @@ fn proc_from_row(r: &rusqlite::Row) -> rusqlite::Result<Proc> {
 
 /// Every process of this kernel that was not removed.
 pub fn procs(conn: &Connection) -> Res<Vec<Proc>> {
-    let mut stmt = conn.prepare_cached(&format!("SELECT {PROC_COLUMNS} FROM procs WHERE status != 'removed' ORDER BY created_at, addr"))?;
-    let rows = stmt.query_map([], proc_from_row)?.collect::<Result<_, _>>()?;
+    let mut stmt = conn.prepare_cached(&format!(
+        "SELECT {PROC_COLUMNS} FROM procs WHERE status != 'removed' ORDER BY created_at, addr"
+    ))?;
+    let rows = stmt
+        .query_map([], proc_from_row)?
+        .collect::<Result<_, _>>()?;
     Ok(rows)
 }
 
 /// The process with this address, if it exists and was not removed.
 pub fn find_proc(conn: &Connection, addr: &str) -> Res<Option<Proc>> {
     Ok(conn
-        .prepare_cached(&format!("SELECT {PROC_COLUMNS} FROM procs WHERE addr = ?1 AND status != 'removed'"))?
+        .prepare_cached(&format!(
+            "SELECT {PROC_COLUMNS} FROM procs WHERE addr = ?1 AND status != 'removed'"
+        ))?
         .query_row([addr], proc_from_row)
         .optional()?)
 }
 
 /// Whether someone here said they take this kernel to be gone.
 pub fn kernel_closed(conn: &Connection, name: &str) -> bool {
-    conn.query_row("SELECT closed FROM kernels WHERE name = ?1", [name], |r| r.get::<_, i64>(0)).map(|c| c != 0).unwrap_or(false)
+    conn.query_row("SELECT closed FROM kernels WHERE name = ?1", [name], |r| {
+        r.get::<_, i64>(0)
+    })
+    .map(|c| c != 0)
+    .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -437,36 +520,104 @@ mod tests {
     use serde_json::json;
 
     fn rec(k: &str, n: i64, kind: &str, proc: &str, data: Value) -> Rec {
-        Rec { k: k.into(), n: Some(n), at: n, kind: kind.into(), proc: proc.into(), data }
+        Rec {
+            k: k.into(),
+            n: Some(n),
+            at: n,
+            kind: kind.into(),
+            proc: proc.into(),
+            data,
+        }
     }
 
     fn status(conn: &Connection, id: &str) -> String {
-        conn.query_row("SELECT status FROM messages WHERE id = ?1", [id], |r| r.get(0)).unwrap()
+        conn.query_row("SELECT status FROM messages WHERE id = ?1", [id], |r| {
+            r.get(0)
+        })
+        .unwrap()
     }
 
     #[test]
     fn a_record_counts_once() {
         let conn = open_memory().unwrap();
-        let r = rec("a", 1, "send", "x@a", json!({"id": "a:1", "from": "x@a", "to": "y@a", "body": "hi"}));
+        let r = rec(
+            "a",
+            1,
+            "send",
+            "x@a",
+            json!({"id": "a:1", "from": "x@a", "to": "y@a", "body": "hi"}),
+        );
         assert!(insert(&conn, &r).unwrap().is_some());
         assert!(insert(&conn, &r).unwrap().is_none());
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0)).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(count, 1);
     }
 
     #[test]
     fn a_message_to_another_kernel_is_followed_by_what_that_kernel_says() {
         let conn = open_memory().unwrap();
-        insert(&conn, &rec("a", 1, "send", "x@a", json!({"id": "a:1", "from": "x@a", "to": "y@b", "body": "hi"}))).unwrap();
+        insert(
+            &conn,
+            &rec(
+                "a",
+                1,
+                "send",
+                "x@a",
+                json!({"id": "a:1", "from": "x@a", "to": "y@b", "body": "hi"}),
+            ),
+        )
+        .unwrap();
         assert_eq!(status(&conn, "a:1"), "sent");
-        insert(&conn, &rec("a", 2, "forward", "x@a", json!({"message": "a:1", "next": "b"}))).unwrap();
+        insert(
+            &conn,
+            &rec(
+                "a",
+                2,
+                "forward",
+                "x@a",
+                json!({"message": "a:1", "next": "b"}),
+            ),
+        )
+        .unwrap();
         assert_eq!(status(&conn, "a:1"), "forwarded");
-        insert(&conn, &rec("a", 3, "receipt", "x@a", json!({"message": "a:1", "status": "pending"}))).unwrap();
+        insert(
+            &conn,
+            &rec(
+                "a",
+                3,
+                "receipt",
+                "x@a",
+                json!({"message": "a:1", "status": "pending"}),
+            ),
+        )
+        .unwrap();
         assert_eq!(status(&conn, "a:1"), "pending");
-        insert(&conn, &rec("a", 4, "receipt", "x@a", json!({"message": "a:1", "status": "handled"}))).unwrap();
+        insert(
+            &conn,
+            &rec(
+                "a",
+                4,
+                "receipt",
+                "x@a",
+                json!({"message": "a:1", "status": "handled"}),
+            ),
+        )
+        .unwrap();
         assert_eq!(status(&conn, "a:1"), "handled");
         // What arrives late does not undo it.
-        insert(&conn, &rec("a", 5, "receipt", "x@a", json!({"message": "a:1", "status": "pending"}))).unwrap();
+        insert(
+            &conn,
+            &rec(
+                "a",
+                5,
+                "receipt",
+                "x@a",
+                json!({"message": "a:1", "status": "pending"}),
+            ),
+        )
+        .unwrap();
         assert_eq!(status(&conn, "a:1"), "handled");
     }
 
@@ -476,28 +627,86 @@ mod tests {
         let request = json!({"id": "a:1", "from": "x@a", "to": "kernel@b", "body": "stop y@b", "request": {"argv": ["stop", "y@b"]}});
         insert(&conn, &rec("b", 1, "arrive", "kernel@b", request)).unwrap();
         assert_eq!(status(&conn, "a:1"), "pending");
-        insert(&conn, &rec("b", 2, "request_done", "kernel@b", json!({"message": "a:1", "code": 0, "result": "y@b is stopped"}))).unwrap();
+        insert(
+            &conn,
+            &rec(
+                "b",
+                2,
+                "request_done",
+                "kernel@b",
+                json!({"message": "a:1", "code": 0, "result": "y@b is stopped"}),
+            ),
+        )
+        .unwrap();
         assert_eq!(status(&conn, "a:1"), "handled");
         // Ordinary mail to a kernel or a person is only kept.
-        insert(&conn, &rec("b", 3, "arrive", "human@b", json!({"id": "a:2", "from": "x@a", "to": "human@b", "body": "hi"}))).unwrap();
+        insert(
+            &conn,
+            &rec(
+                "b",
+                3,
+                "arrive",
+                "human@b",
+                json!({"id": "a:2", "from": "x@a", "to": "human@b", "body": "hi"}),
+            ),
+        )
+        .unwrap();
         assert_eq!(status(&conn, "a:2"), "handled");
     }
 
     #[test]
     fn a_turn_that_fails_puts_its_mail_back() {
         let conn = open_memory().unwrap();
-        insert(&conn, &rec("a", 1, "spawn", "y@a", json!({"branch": "y@a", "harness": "h", "parent": "human@a"}))).unwrap();
-        insert(&conn, &rec("a", 2, "send", "human@a", json!({"id": "a:2", "from": "human@a", "to": "y@a", "body": "hi"}))).unwrap();
-        insert(&conn, &rec("a", 3, "turn_start", "y@a", json!({"messages": ["a:2"]}))).unwrap();
+        insert(
+            &conn,
+            &rec(
+                "a",
+                1,
+                "spawn",
+                "y@a",
+                json!({"branch": "y@a", "harness": "h", "parent": "human@a"}),
+            ),
+        )
+        .unwrap();
+        insert(
+            &conn,
+            &rec(
+                "a",
+                2,
+                "send",
+                "human@a",
+                json!({"id": "a:2", "from": "human@a", "to": "y@a", "body": "hi"}),
+            ),
+        )
+        .unwrap();
+        insert(
+            &conn,
+            &rec("a", 3, "turn_start", "y@a", json!({"messages": ["a:2"]})),
+        )
+        .unwrap();
         assert_eq!(status(&conn, "a:2"), "taken");
         assert!(find_proc(&conn, "y@a").unwrap().unwrap().busy);
-        insert(&conn, &rec("a", 4, "turn_failed", "y@a", json!({"messages": ["a:2"], "failures": 1}))).unwrap();
+        insert(
+            &conn,
+            &rec(
+                "a",
+                4,
+                "turn_failed",
+                "y@a",
+                json!({"messages": ["a:2"], "failures": 1}),
+            ),
+        )
+        .unwrap();
         assert_eq!(status(&conn, "a:2"), "pending");
         let p = find_proc(&conn, "y@a").unwrap().unwrap();
         assert!(!p.busy);
         assert_eq!(p.failures, 1);
         // A kernel that comes up again was not in the middle of anything.
-        insert(&conn, &rec("a", 5, "turn_start", "y@a", json!({"messages": ["a:2"]}))).unwrap();
+        insert(
+            &conn,
+            &rec("a", 5, "turn_start", "y@a", json!({"messages": ["a:2"]})),
+        )
+        .unwrap();
         insert(&conn, &rec("a", 6, "up", "kernel@a", json!({}))).unwrap();
         assert_eq!(status(&conn, "a:2"), "pending");
     }
@@ -506,11 +715,27 @@ mod tests {
     fn removing_keeps_the_history() {
         let conn = open_memory().unwrap();
         insert(&conn, &rec("a", 1, "spawn", "y@a", json!({"branch": "y@a", "harness": "h", "parent": "human@a", "tags": {"project": "moe"}}))).unwrap();
-        insert(&conn, &rec("a", 2, "send", "human@a", json!({"id": "a:2", "from": "human@a", "to": "y@a", "body": "hi"}))).unwrap();
-        insert(&conn, &rec("a", 3, "remove", "y@a", json!({"by": "human@a"}))).unwrap();
+        insert(
+            &conn,
+            &rec(
+                "a",
+                2,
+                "send",
+                "human@a",
+                json!({"id": "a:2", "from": "human@a", "to": "y@a", "body": "hi"}),
+            ),
+        )
+        .unwrap();
+        insert(
+            &conn,
+            &rec("a", 3, "remove", "y@a", json!({"by": "human@a"})),
+        )
+        .unwrap();
         assert!(find_proc(&conn, "y@a").unwrap().is_none());
         assert_eq!(status(&conn, "a:2"), "dropped");
-        let records: i64 = conn.query_row("SELECT COUNT(*) FROM records", [], |r| r.get(0)).unwrap();
+        let records: i64 = conn
+            .query_row("SELECT COUNT(*) FROM records", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(records, 3);
     }
 }

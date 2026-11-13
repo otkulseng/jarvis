@@ -55,7 +55,9 @@ fn run(cli: Cli) -> Res<i32> {
     let command = cli.command.expect("there is a command");
     match &command {
         Cmd::Up(_) => {
-            let Cmd::Up(args) = command else { unreachable!() };
+            let Cmd::Up(args) = command else {
+                unreachable!()
+            };
             kernel::up(args)?;
             return Ok(0);
         }
@@ -80,7 +82,8 @@ fn run(cli: Cli) -> Res<i32> {
         }
         Cmd::Spawn(args) => {
             if let Some(file) = &args.prompt_file {
-                let text = std::fs::read_to_string(file).map_err(|e| format!("could not read {file}: {e}"))?;
+                let text = std::fs::read_to_string(file)
+                    .map_err(|e| format!("could not read {file}: {e}"))?;
                 request["files"] = json!({ file: text });
             }
         }
@@ -89,7 +92,9 @@ fn run(cli: Cli) -> Res<i32> {
     let mut stream = UnixStream::connect(socket(None)?)?;
     writeln!(stream, "{request}")?;
     for line in BufReader::new(stream).lines() {
-        let Ok(answer) = serde_json::from_str::<Value>(&line?) else { continue };
+        let Ok(answer) = serde_json::from_str::<Value>(&line?) else {
+            continue;
+        };
         if let Some(text) = answer["o"].as_str() {
             println!("{text}");
         } else if let Some(text) = answer["e"].as_str() {
@@ -109,12 +114,18 @@ fn socket(named: Option<&str>) -> Res<PathBuf> {
     let dir = kernel::run_dir();
     let of = |name: &str| dir.join(format!("{name}.sock"));
     let runs = |path: &Path| UnixStream::connect(path).is_ok();
-    let from_env = std::env::var("JARVIS_KERNEL").ok().filter(|k| !k.is_empty());
+    let from_env = std::env::var("JARVIS_KERNEL")
+        .ok()
+        .filter(|k| !k.is_empty());
     if let Some(name) = named.map(str::to_string).or(from_env.clone()) {
         if runs(&of(&name)) {
             return Ok(of(&name));
         }
-        let how = if named.is_some() { String::new() } else { " ($JARVIS_KERNEL)".to_string() };
+        let how = if named.is_some() {
+            String::new()
+        } else {
+            " ($JARVIS_KERNEL)".to_string()
+        };
         return Err(format!(
             "the kernel `{name}`{how} is not running on this machine: nothing answers at {}. Start it with `jarvis up {name}`; \
              if it runs with another $JARVIS_RUN, set the same here",
@@ -123,7 +134,13 @@ fn socket(named: Option<&str>) -> Res<PathBuf> {
         .into());
     }
     let mut here: Vec<String> = std::fs::read_dir(&dir)
-        .map(|entries| entries.flatten().filter_map(|e| e.file_name().into_string().ok()).filter_map(|n| n.strip_suffix(".sock").map(str::to_string)).collect())
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter_map(|e| e.file_name().into_string().ok())
+                .filter_map(|n| n.strip_suffix(".sock").map(str::to_string))
+                .collect()
+        })
         .unwrap_or_default();
     here.retain(|name| runs(&of(name)));
     here.sort();

@@ -164,13 +164,19 @@ pub const NO_AGENT: &str = "none";
 
 /// A directory named by a variable of the environment, if it is set.
 fn dir_from_env(name: &str, here: &Path) -> Option<PathBuf> {
-    std::env::var(name).ok().filter(|dir| !dir.is_empty()).map(|dir| here.join(dir))
+    std::env::var(name)
+        .ok()
+        .filter(|dir| !dir.is_empty())
+        .map(|dir| here.join(dir))
 }
 
 /// How often a kernel that works in $JARVIS_SCRATCH saves its database to
 /// the store: $JARVIS_CHECKPOINT_SECONDS, or every minute.
 fn save_every() -> Duration {
-    let seconds = std::env::var("JARVIS_CHECKPOINT_SECONDS").ok().and_then(|s| s.parse::<f64>().ok()).filter(|s| *s > 0.0);
+    let seconds = std::env::var("JARVIS_CHECKPOINT_SECONDS")
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|s| *s > 0.0);
     Duration::from_secs_f64(seconds.unwrap_or(60.0))
 }
 
@@ -236,39 +242,109 @@ pub enum Event {
     /// A command wants something changed. The answer goes back on the sender.
     Mutate(Mutation, Sender<Result<Value, String>>),
     TurnDone(Done),
-    Step { name: String, value: Value },
-    RunExit { name: String, pid: u32, status: String, ok: bool },
-    LinkOpen { id: u64, tx: Sender<String>, close: net::Close },
-    LinkLine { id: u64, value: Value },
-    LinkDown { id: u64, why: String },
+    Step {
+        name: String,
+        value: Value,
+    },
+    RunExit {
+        name: String,
+        pid: u32,
+        status: String,
+        ok: bool,
+    },
+    LinkOpen {
+        id: u64,
+        tx: Sender<String>,
+        close: net::Close,
+    },
+    LinkLine {
+        id: u64,
+        value: Value,
+    },
+    LinkDown {
+        id: u64,
+        why: String,
+    },
     /// A question another kernel asked this one has an answer.
-    Answered { rid: String, to: String, body: Value },
+    Answered {
+        rid: String,
+        to: String,
+        body: Value,
+    },
     /// A request that was sent to this kernel has been carried out.
-    RequestDone { id: String, body: Value },
+    RequestDone {
+        id: String,
+        body: Value,
+    },
     /// Something for a kernel that follows this one: a line, or the end.
-    Publish { sid: String, to: String, item: Value },
+    Publish {
+        sid: String,
+        to: String,
+        item: Value,
+    },
     Tick,
 }
 
 /// What a command asks the kernel for. The answer is `{"o": [lines], "e": [notes]}`.
 pub enum Mutation {
-    Spawn { args: cli::Spawn, by: String, prompt: Option<String> },
-    SetStatus { who: Vec<String>, alive: bool, by: String },
-    Remove { who: String, keep_branch: bool, by: String },
-    Tag { who: String, tags: Vec<(String, String)>, by: String },
-    Send { from: String, to: String, body: String },
-    Link { spec: String, remove: bool },
-    CloseKernel { name: String, by: String },
+    Spawn {
+        args: cli::Spawn,
+        by: String,
+        prompt: Option<String>,
+    },
+    SetStatus {
+        who: Vec<String>,
+        alive: bool,
+        by: String,
+    },
+    Remove {
+        who: String,
+        keep_branch: bool,
+        by: String,
+    },
+    Tag {
+        who: String,
+        tags: Vec<(String, String)>,
+        by: String,
+    },
+    Send {
+        from: String,
+        to: String,
+        body: String,
+    },
+    Link {
+        spec: String,
+        remove: bool,
+    },
+    CloseKernel {
+        name: String,
+        by: String,
+    },
     /// Have another kernel carry out a command, however long it takes to get
     /// there. Answered at once with the request's name; what came of it is
     /// given to `outcome` when that kernel has said.
-    Request { kernel: String, by: String, argv: Vec<String>, extra: Value, outcome: Sender<Value> },
+    Request {
+        kernel: String,
+        by: String,
+        argv: Vec<String>,
+        extra: Value,
+        outcome: Sender<Value>,
+    },
     /// Ask another kernel a question, now. It fails if that kernel cannot be reached.
-    Ask { on: String, request: Value },
+    Ask {
+        on: String,
+        request: Value,
+    },
     /// Follow another kernel: what the command prints there arrives on `to`,
     /// until either side ends it. Answered with the name of the subscription.
-    Subscribe { on: String, request: Value, to: Sender<Value> },
-    Unsubscribe { sid: String },
+    Subscribe {
+        on: String,
+        request: Value,
+        to: Sender<Value>,
+    },
+    Unsubscribe {
+        sid: String,
+    },
 }
 
 fn said(lines: Vec<String>, notes: Vec<String>) -> Value {
@@ -372,7 +448,9 @@ pub struct Done {
 
 pub fn is_executable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
-    fs::metadata(path).map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0).unwrap_or(false)
+    fs::metadata(path)
+        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
 }
 
 fn tail(text: &str, lines: usize) -> String {
@@ -406,7 +484,13 @@ struct Dial {
 
 impl Dial {
     fn new() -> Dial {
-        Dial { link: None, next_try: Instant::now(), wait: Duration::from_secs(2), problem: None, tries: 0 }
+        Dial {
+            link: None,
+            next_try: Instant::now(),
+            wait: Duration::from_secs(2),
+            problem: None,
+            tries: 0,
+        }
     }
 }
 
@@ -471,7 +555,10 @@ pub struct Kernel {
 /// used up when some dozens of processes work at the same moment.
 fn raise_open_files() {
     unsafe {
-        let mut limit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+        let mut limit = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
         if libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) != 0 {
             return;
         }
@@ -483,7 +570,14 @@ fn raise_open_files() {
             if wanted <= limit.rlim_cur {
                 return;
             }
-            if libc::setrlimit(libc::RLIMIT_NOFILE, &libc::rlimit { rlim_cur: wanted, rlim_max: limit.rlim_max }) == 0 {
+            if libc::setrlimit(
+                libc::RLIMIT_NOFILE,
+                &libc::rlimit {
+                    rlim_cur: wanted,
+                    rlim_max: limit.rlim_max,
+                },
+            ) == 0
+            {
                 return;
             }
         }
@@ -511,7 +605,9 @@ pub fn up(args: cli::Up) -> Res<()> {
     // code. Scratch, if there is one, is where the kernel works.
     let store = dir_from_env("JARVIS_STORE", &here).unwrap_or_else(|| repo.root.join(".jarvis"));
     let state = store.join("kernel").join(&name);
-    let work = dir_from_env("JARVIS_SCRATCH", &here).map(|scratch| scratch.join("kernel").join(&name)).unwrap_or_else(|| state.clone());
+    let work = dir_from_env("JARVIS_SCRATCH", &here)
+        .map(|scratch| scratch.join("kernel").join(&name))
+        .unwrap_or_else(|| state.clone());
     for dir in [state.join("proc"), state.join("log"), work.clone()] {
         fs::create_dir_all(&dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
     }
@@ -527,13 +623,22 @@ pub fn up(args: cli::Up) -> Res<()> {
 
     let socket = run_dir.join(format!("{name}.sock"));
     if UnixStream::connect(&socket).is_ok() {
-        return Err(format!("a kernel called `{name}` is already running on this machine (its socket is {})", socket.display()).into());
+        return Err(format!(
+            "a kernel called `{name}` is already running on this machine (its socket is {})",
+            socket.display()
+        )
+        .into());
     }
     let kept = state.join("kernel.db");
     if work != state {
         // The database in the store is the only one there is. Whatever an
         // earlier run left in scratch is not looked at.
-        for left in ["kernel.db", "kernel.db-wal", "kernel.db-shm", "kernel.db.copying"] {
+        for left in [
+            "kernel.db",
+            "kernel.db-wal",
+            "kernel.db-shm",
+            "kernel.db.copying",
+        ] {
             let _ = fs::remove_file(work.join(left));
         }
         if kept.exists() {
@@ -544,7 +649,11 @@ pub fn up(args: cli::Up) -> Res<()> {
     let db = index::open(&work.join("kernel.db"))?;
     match index::get_meta(&db, "name")? {
         Some(was) if was != name => {
-            return Err(format!("{} is the database of the kernel `{was}`, not of `{name}`", kept.display()).into());
+            return Err(format!(
+                "{} is the database of the kernel `{was}`, not of `{name}`",
+                kept.display()
+            )
+            .into());
         }
         _ => index::set_meta(&db, "name", &name)?,
     }
@@ -562,7 +671,10 @@ pub fn up(args: cli::Up) -> Res<()> {
     let lost_some = work != state && index::get_meta(&db, "running")?.as_deref() == Some("yes");
     index::set_meta(&db, "running", "yes")?;
     if lost_some {
-        db.execute("UPDATE sqlite_sequence SET seq = seq + ?1 WHERE name = 'records'", [SKIPPED])?;
+        db.execute(
+            "UPDATE sqlite_sequence SET seq = seq + ?1 WHERE name = 'records'",
+            [SKIPPED],
+        )?;
     }
 
     let cfg = Arc::new(Config {
@@ -573,18 +685,29 @@ pub fn up(args: cli::Up) -> Res<()> {
         state,
         work,
         run_dir,
-        exe: std::env::current_exe().map_err(|e| format!("could not find out where this program is: {e}"))?,
+        exe: std::env::current_exe()
+            .map_err(|e| format!("could not find out where this program is: {e}"))?,
     });
     fs::write(cfg.guide(), include_str!("../../GUIDE.md"))?;
 
     let (tx, rx) = mpsc::channel();
-    let shared = Arc::new(Shared { followers: Mutex::new(Vec::new()), net: Mutex::new(NetView::default()), next_link: AtomicU64::new(1) });
+    let shared = Arc::new(Shared {
+        followers: Mutex::new(Vec::new()),
+        net: Mutex::new(NetView::default()),
+        next_link: AtomicU64::new(1),
+    });
     // Being the one kernel of this name on this machine is having its socket.
     serve::listen(cfg.clone(), tx.clone(), shared.clone())?;
 
-    let next_n: i64 = db.query_row("SELECT COALESCE(MAX(n), 0) + 1 FROM records WHERE k = ?1", [&name], |r| r.get(0))?;
+    let next_n: i64 = db.query_row(
+        "SELECT COALESCE(MAX(n), 0) + 1 FROM records WHERE k = ?1",
+        [&name],
+        |r| r.get(0),
+    )?;
     let next_n = next_n + if lost_some { SKIPPED } else { 0 };
-    let printed: i64 = db.query_row("SELECT COALESCE(MAX(seq), 0) FROM records", [], |r| r.get(0))?;
+    let printed: i64 = db.query_row("SELECT COALESCE(MAX(seq), 0) FROM records", [], |r| {
+        r.get(0)
+    })?;
     let mut kernel = Kernel {
         cfg,
         me: name,
@@ -616,16 +739,30 @@ pub fn up(args: cli::Up) -> Res<()> {
     };
     if new {
         let identity = kernel.cfg.identity.clone();
-        kernel.rec(&at(KERNEL, &kernel.me.clone()), "kernel", json!({"identity": identity, "version": cli::VERSION}))?;
+        kernel.rec(
+            &at(KERNEL, &kernel.me.clone()),
+            "kernel",
+            json!({"identity": identity, "version": cli::VERSION}),
+        )?;
     }
     if lost_some {
-        kernel.rec(&at(KERNEL, &kernel.me.clone()), "restored", json!({"from": kernel.cfg.kept_db()}))?;
+        kernel.rec(
+            &at(KERNEL, &kernel.me.clone()),
+            "restored",
+            json!({"from": kernel.cfg.kept_db()}),
+        )?;
     }
     if kernel.cfg.saves() {
         // In the store from its first moment: a kernel that is lost before
         // its first save would otherwise have spent its name.
         let kept = kernel.cfg.kept_db();
-        copy_db(&kernel.db, &kept).map_err(|e| format!("could not save the database of `{}` to the store ({}): {e}", kernel.me, kept.display()))?;
+        copy_db(&kernel.db, &kept).map_err(|e| {
+            format!(
+                "could not save the database of `{}` to the store ({}): {e}",
+                kernel.me,
+                kept.display()
+            )
+        })?;
         kernel.saved_changes = kernel.db.total_changes();
     }
     kernel.run()
@@ -638,7 +775,9 @@ fn hide_from_git(repo: &Repo, dirs: &[&PathBuf]) {
     let mut listed = fs::read_to_string(&exclude).unwrap_or_default();
     let mut changed = false;
     for dir in dirs {
-        let Ok(inside) = dir.strip_prefix(&repo.root) else { continue };
+        let Ok(inside) = dir.strip_prefix(&repo.root) else {
+            continue;
+        };
         // Its top directory under `.jarvis/`, such as `/.jarvis/kernel/`.
         let top: PathBuf = inside.components().take(2).collect();
         let line = format!("/{}/", top.display());
@@ -665,7 +804,17 @@ impl Kernel {
     /// Write a record down. Returns its number.
     fn rec(&mut self, proc: &str, kind: &str, data: Value) -> Res<i64> {
         let n = self.next_n;
-        index::insert(&self.db, &Rec { k: self.me.clone(), n: Some(n), at: index::now_ms(), kind: kind.into(), proc: proc.into(), data })?;
+        index::insert(
+            &self.db,
+            &Rec {
+                k: self.me.clone(),
+                n: Some(n),
+                at: index::now_ms(),
+                kind: kind.into(),
+                proc: proc.into(),
+                data,
+            },
+        )?;
         self.next_n += 1;
         self.dirty = true;
         Ok(n)
@@ -701,17 +850,26 @@ impl Kernel {
             self.cfg.repo.root.display(),
             self.cfg.state.display(),
             if self.cfg.saves() {
-                format!("working in {} and saving every {:?}", self.cfg.work.display(), self.save_every)
+                format!(
+                    "working in {} and saving every {:?}",
+                    self.cfg.work.display(),
+                    self.save_every
+                )
             } else {
                 "working there directly".to_string()
             },
             self.cfg.run_dir.display()
         );
         let me = self.addr(KERNEL);
-        self.rec(&me, "up", json!({"pid": std::process::id(), "version": cli::VERSION}))?;
+        self.rec(
+            &me,
+            "up",
+            json!({"pid": std::process::id(), "version": cli::VERSION}),
+        )?;
         let links: Vec<String> = {
             let mut stmt = self.db.prepare("SELECT spec FROM links")?;
-            stmt.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?
+            stmt.query_map([], |r| r.get(0))?
+                .collect::<Result<_, _>>()?
         };
         for spec in links {
             self.dials.insert(spec, Dial::new());
@@ -722,7 +880,8 @@ impl Kernel {
         // Requests that arrived and were not carried out before the kernel last stopped.
         let left: Vec<String> = {
             let mut stmt = self.db.prepare("SELECT data FROM records WHERE kind = 'arrive' AND json_extract(data, '$.id') IN (SELECT id FROM messages WHERE recipient = ?1 AND status = 'pending')")?;
-            stmt.query_map([&me], |r| r.get(0))?.collect::<Result<_, _>>()?
+            stmt.query_map([&me], |r| r.get(0))?
+                .collect::<Result<_, _>>()?
         };
         for data in left {
             if let Ok(message) = serde_json::from_str::<Value>(&data) {
@@ -753,17 +912,32 @@ impl Kernel {
             Event::Mutate(mutation, reply) => self.mutate(mutation, reply),
             Event::TurnDone(done) => self.finish(done),
             Event::Step { name, value } => {
-                let rec = Rec { k: self.me.clone(), n: None, at: index::now_ms(), kind: "step".into(), proc: self.addr(&name), data: value };
+                let rec = Rec {
+                    k: self.me.clone(),
+                    n: None,
+                    at: index::now_ms(),
+                    kind: "step".into(),
+                    proc: self.addr(&name),
+                    data: value,
+                };
                 if index::insert(&self.db, &rec).is_ok() {
                     self.dirty = true;
                 }
             }
-            Event::RunExit { name, pid, status, ok } => self.run_exit(&name, pid, &status, ok),
+            Event::RunExit {
+                name,
+                pid,
+                status,
+                ok,
+            } => self.run_exit(&name, pid, &status, ok),
             Event::LinkOpen { id, tx, close } => self.link_open(id, tx, close),
             Event::LinkLine { id, value } => self.link_line(id, value),
             Event::LinkDown { id, why } => self.link_down(id, &why),
             Event::Answered { rid, to, body } => {
-                self.route_to(&to, json!({"t": "res", "rid": rid, "dst": to, "body": body}));
+                self.route_to(
+                    &to,
+                    json!({"t": "res", "rid": rid, "dst": to, "body": body}),
+                );
             }
             Event::RequestDone { id, body } => self.request_done(&id, &body),
             Event::Publish { sid, to, item } => {
@@ -783,7 +957,11 @@ impl Kernel {
 
     /// Tell whoever follows this kernel to look again.
     fn wake_followers(&self) {
-        self.shared.followers.lock().unwrap().retain(|f| !matches!(f.try_send(()), Err(mpsc::TrySendError::Disconnected(_))));
+        self.shared
+            .followers
+            .lock()
+            .unwrap()
+            .retain(|f| !matches!(f.try_send(()), Err(mpsc::TrySendError::Disconnected(_))));
     }
 
     /// End what a kernel that was killed left running. (That this is the only
@@ -791,7 +969,10 @@ impl Kernel {
     fn take_over(&mut self) -> Res<()> {
         let left = children::tracked(&self.db, None);
         if !left.is_empty() {
-            eprintln!("jarvis: ending {} program(s) this kernel left running when it last stopped", left.len());
+            eprintln!(
+                "jarvis: ending {} program(s) this kernel left running when it last stopped",
+                left.len()
+            );
             children::end_all(left);
         }
         self.db.execute("DELETE FROM children", [])?;
@@ -842,7 +1023,9 @@ impl Kernel {
         }
         let failed = self.save_failed.swap(false, Ordering::SeqCst);
         let changes = self.db.total_changes();
-        if now.duration_since(self.last_save) < self.save_every || (changes == self.saved_changes && !failed) {
+        if now.duration_since(self.last_save) < self.save_every
+            || (changes == self.saved_changes && !failed)
+        {
             return;
         }
         self.last_save = now;
@@ -852,7 +1035,10 @@ impl Kernel {
         let (saving, save_failed) = (self.saving.clone(), self.save_failed.clone());
         thread::spawn(move || {
             if let Err(e) = copy_db_at(&from, &to) {
-                eprintln!("jarvis: could not save the database to {}: {e}. It is tried again.", to.display());
+                eprintln!(
+                    "jarvis: could not save the database to {}: {e}. It is tried again.",
+                    to.display()
+                );
                 save_failed.store(true, Ordering::SeqCst);
             }
             saving.store(false, Ordering::SeqCst);
@@ -864,7 +1050,12 @@ impl Kernel {
         let now = Instant::now();
         self.save_if_due(now);
         // Mail whose turn failed is offered again after its pause.
-        let due: Vec<String> = self.live.iter().filter(|(_, l)| l.retry_at.is_some_and(|at| now >= at)).map(|(name, _)| name.clone()).collect();
+        let due: Vec<String> = self
+            .live
+            .iter()
+            .filter(|(_, l)| l.retry_at.is_some_and(|at| now >= at))
+            .map(|(name, _)| name.clone())
+            .collect();
         for name in due {
             if let Some(live) = self.live.get_mut(&name) {
                 live.retry_at = None;
@@ -872,7 +1063,12 @@ impl Kernel {
             self.tend(&name);
         }
         // Links that should be up and are not.
-        let wanted: Vec<String> = self.dials.iter().filter(|(_, d)| d.link.is_none() && now >= d.next_try).map(|(spec, _)| spec.clone()).collect();
+        let wanted: Vec<String> = self
+            .dials
+            .iter()
+            .filter(|(_, d)| d.link.is_none() && now >= d.next_try)
+            .map(|(spec, _)| spec.clone())
+            .collect();
         for spec in wanted {
             let id = self.shared.next_link.fetch_add(1, Ordering::SeqCst);
             if let Some(dial) = self.dials.get_mut(&spec) {
@@ -883,7 +1079,12 @@ impl Kernel {
         // A link that has gone silent is taken down, to be made again.
         if now.duration_since(self.last_ping) >= Duration::from_secs(20) {
             self.last_ping = now;
-            let silent: Vec<u64> = self.links.iter().filter(|(_, l)| now.duration_since(l.heard) > Duration::from_secs(70)).map(|(id, _)| *id).collect();
+            let silent: Vec<u64> = self
+                .links
+                .iter()
+                .filter(|(_, l)| now.duration_since(l.heard) > Duration::from_secs(70))
+                .map(|(id, _)| *id)
+                .collect();
             for id in silent {
                 if let Some(link) = self.links.get(&id) {
                     (link.close)();
@@ -894,13 +1095,20 @@ impl Kernel {
             }
         }
         // A question another kernel never answered.
-        let stale: Vec<String> = self.asked.iter().filter(|(_, (_, since))| now.duration_since(*since) > ASK_PATIENCE).map(|(rid, _)| rid.clone()).collect();
+        let stale: Vec<String> = self
+            .asked
+            .iter()
+            .filter(|(_, (_, since))| now.duration_since(*since) > ASK_PATIENCE)
+            .map(|(rid, _)| rid.clone())
+            .collect();
         for rid in stale {
             if let Some((reply, _)) = self.asked.remove(&rid) {
-                let _ = reply.send(Err(format!("it did not answer within {} seconds", ASK_PATIENCE.as_secs())));
+                let _ = reply.send(Err(format!(
+                    "it did not answer within {} seconds",
+                    ASK_PATIENCE.as_secs()
+                )));
             }
         }
-
     }
 
     /// Print what was written down since last time, as `jarvis log` would.
@@ -932,7 +1140,11 @@ impl Kernel {
         let answer = match mutation {
             Mutation::Spawn { args, by, prompt } => self.spawn(args, &by, prompt),
             Mutation::SetStatus { who, alive, by } => self.set_status(&who, alive, &by),
-            Mutation::Remove { who, keep_branch, by } => {
+            Mutation::Remove {
+                who,
+                keep_branch,
+                by,
+            } => {
                 // Answered once nothing of the process runs any more.
                 match self.remove(&who, keep_branch, &by, reply.clone()) {
                     Ok(()) => return,
@@ -943,7 +1155,13 @@ impl Kernel {
             Mutation::Send { from, to, body } => self.send(&from, &to, &body),
             Mutation::Link { spec, remove } => self.link(&spec, remove),
             Mutation::CloseKernel { name, by } => self.close_kernel(&name, &by),
-            Mutation::Request { kernel, by, argv, extra, outcome } => self.request(&kernel, &by, &argv, extra, outcome),
+            Mutation::Request {
+                kernel,
+                by,
+                argv,
+                extra,
+                outcome,
+            } => self.request(&kernel, &by, &argv, extra, outcome),
             Mutation::Ask { on, request } => {
                 if !self.table.contains_key(&on) {
                     Err(self.out_of_reach(&on).into())
@@ -951,7 +1169,10 @@ impl Kernel {
                     self.asked_n += 1;
                     let rid = format!("{}-{}", self.me, self.asked_n);
                     self.asked.insert(rid.clone(), (reply, Instant::now()));
-                    self.route_to(&on, json!({"t": "req", "rid": rid, "src": self.me, "dst": on, "body": request}));
+                    self.route_to(
+                        &on,
+                        json!({"t": "req", "rid": rid, "src": self.me, "dst": on, "body": request}),
+                    );
                     return;
                 }
             }
@@ -962,7 +1183,10 @@ impl Kernel {
                     self.asked_n += 1;
                     let sid = format!("{}-{}", self.me, self.asked_n);
                     self.subs.insert(sid.clone(), (on.clone(), to));
-                    self.route_to(&on, json!({"t": "sub", "sid": sid, "src": self.me, "dst": on, "body": request}));
+                    self.route_to(
+                        &on,
+                        json!({"t": "sub", "sid": sid, "src": self.me, "dst": on, "body": request}),
+                    );
                     Ok(said(vec![sid], vec![]))
                 }
             }

@@ -35,7 +35,11 @@ fn run_tracked(
         children::signal(pid, libc::SIGKILL);
     }
     // A program that does not read its input is not an error.
-    let _ = child.stdin.take().expect("stdin is piped").write_all(input.as_bytes());
+    let _ = child
+        .stdin
+        .take()
+        .expect("stdin is piped")
+        .write_all(input.as_bytes());
     // Its errors are collected on the side, so that it can never be stuck
     // writing them while its output is being read here.
     let mut errors = child.stderr.take().expect("stderr is piped");
@@ -60,7 +64,11 @@ fn run_tracked(
     }
     let out = child
         .wait()
-        .map(|status| Output { status, stdout, stderr: errors.join().unwrap_or_default() })
+        .map(|status| Output {
+            status,
+            stdout,
+            stderr: errors.join().unwrap_or_default(),
+        })
         .map_err(|e| e.to_string());
     // Nothing it started outlives it.
     children::signal(pid, libc::SIGKILL);
@@ -77,11 +85,24 @@ enum Handled {
 }
 
 fn run_handle(job: &Job, conn: Option<&Connection>, mail: &Mail) -> Handled {
-    let input = json!({"id": mail.id, "from": mail.from, "body": mail.body, "attempt": mail.attempt}).to_string();
-    match run_tracked(job, conn, "handle", Command::new(job.dir.join(".jarvis/handle")), &input, &mut |_| false) {
+    let input =
+        json!({"id": mail.id, "from": mail.from, "body": mail.body, "attempt": mail.attempt})
+            .to_string();
+    match run_tracked(
+        job,
+        conn,
+        "handle",
+        Command::new(job.dir.join(".jarvis/handle")),
+        &input,
+        &mut |_| false,
+    ) {
         Ok(out) if out.status.success() => Handled::Yes,
         Ok(out) if out.status.code() == Some(3) => Handled::NotMine,
-        Ok(out) => Handled::Failed(format!("{}\n{}", out.status, tail(&String::from_utf8_lossy(&out.stderr), 30))),
+        Ok(out) => Handled::Failed(format!(
+            "{}\n{}",
+            out.status,
+            tail(&String::from_utf8_lossy(&out.stderr), 30)
+        )),
         Err(e) => Handled::Failed(e),
     }
 }
@@ -95,7 +116,9 @@ pub(super) fn no_such_harness(name: &str) -> String {
 }
 
 fn run_agent(job: &Job, conn: Option<&Connection>, prompt: &str) -> Result<Value, String> {
-    let Some(harness) = &job.harness else { return Err("it has no agent".into()) };
+    let Some(harness) = &job.harness else {
+        return Err("it has no agent".into());
+    };
     if !crate::harness::known(harness) {
         return Err(no_such_harness(harness));
     }
@@ -108,7 +131,10 @@ fn run_agent(job: &Job, conn: Option<&Connection>, prompt: &str) -> Result<Value
     // What the agent does is noted while it does it.
     let mut step = |line: &str| match serde_json::from_str::<Value>(line) {
         Ok(value) if value.get("step").is_some() => {
-            let _ = job.tx.send(Event::Step { name: job.name.clone(), value });
+            let _ = job.tx.send(Event::Step {
+                name: job.name.clone(),
+                value,
+            });
             true
         }
         _ => false,
@@ -116,12 +142,24 @@ fn run_agent(job: &Job, conn: Option<&Connection>, prompt: &str) -> Result<Value
     let out = run_tracked(job, conn, "agent", command, prompt, &mut step)?;
     let stdout = String::from_utf8_lossy(&out.stdout);
     if !out.status.success() {
-        return Err(format!("harness exited with {}:\n{}\n{}", out.status, tail(&String::from_utf8_lossy(&out.stderr), 30), tail(&stdout, 10)));
+        return Err(format!(
+            "harness exited with {}:\n{}\n{}",
+            out.status,
+            tail(&String::from_utf8_lossy(&out.stderr), 30),
+            tail(&stdout, 10)
+        ));
     }
-    let value: Value = serde_json::from_str(stdout.trim())
-        .map_err(|_| format!("harness did not print a JSON object:\n{}", tail(&stdout, 10)))?;
+    let value: Value = serde_json::from_str(stdout.trim()).map_err(|_| {
+        format!(
+            "harness did not print a JSON object:\n{}",
+            tail(&stdout, 10)
+        )
+    })?;
     if !value["reply"].is_string() {
-        return Err(format!("harness output has no `reply`:\n{}", tail(&stdout, 10)));
+        return Err(format!(
+            "harness output has no `reply`:\n{}",
+            tail(&stdout, 10)
+        ));
     }
     Ok(value)
 }
@@ -132,7 +170,8 @@ pub(super) fn turn(job: Job) -> Done {
     let conn = conn.as_ref();
     let cancelled = || job.cancel.load(Ordering::SeqCst);
     let has_handle = is_executable(&job.dir.join(".jarvis/handle"));
-    let (mut by_code, mut for_agent, mut code_failed, mut prompt) = (Vec::new(), Vec::new(), Vec::new(), String::new());
+    let (mut by_code, mut for_agent, mut code_failed, mut prompt) =
+        (Vec::new(), Vec::new(), Vec::new(), String::new());
     for mail in &job.mail {
         let mut failure = None;
         if has_handle {
@@ -149,7 +188,10 @@ pub(super) fn turn(job: Job) -> Done {
             break;
         }
         for_agent.push(mail.id.clone());
-        prompt.push_str(&format!("--- message {} from {} ---\n{}\n", mail.id, mail.from, mail.body));
+        prompt.push_str(&format!(
+            "--- message {} from {} ---\n{}\n",
+            mail.id, mail.from, mail.body
+        ));
         if mail.attempt > 1 {
             prompt.push_str(&format!(
                 "[jarvis] This message was given to you before (this is attempt {}), and that turn did not finish. \
@@ -158,7 +200,9 @@ pub(super) fn turn(job: Job) -> Done {
             ));
         }
         if let Some(error) = failure {
-            prompt.push_str(&format!("[jarvis] Your .jarvis/handle failed on this message:\n{error}\n"));
+            prompt.push_str(&format!(
+                "[jarvis] Your .jarvis/handle failed on this message:\n{error}\n"
+            ));
             code_failed.push((mail.id.clone(), error));
         }
         prompt.push('\n');
@@ -189,5 +233,11 @@ pub(super) fn turn(job: Job) -> Done {
             Err(error) => Agent::Failed(error),
         }
     };
-    Done { name: job.name, by_code, for_agent, code_failed, agent }
+    Done {
+        name: job.name,
+        by_code,
+        for_agent,
+        code_failed,
+        agent,
+    }
 }

@@ -13,10 +13,21 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 fn run(mut command: Command, args: &[&str], input: Option<&str>) -> Res<String> {
-    command.args(["-c", "gc.auto=0"]).args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = command.spawn().map_err(|e| format!("could not run git: {e}"))?;
+    command
+        .args(["-c", "gc.auto=0"])
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("could not run git: {e}"))?;
     if let Some(input) = input {
-        let _ = child.stdin.take().expect("stdin is piped").write_all(input.as_bytes());
+        let _ = child
+            .stdin
+            .take()
+            .expect("stdin is piped")
+            .write_all(input.as_bytes());
     }
     drop(child.stdin.take());
     let out = child.wait_with_output()?;
@@ -47,11 +58,18 @@ pub struct Repo {
 impl Repo {
     /// The repository `dir` is in, also when `dir` is one of its working directories.
     pub fn find(dir: &Path) -> Res<Repo> {
-        let common = git(dir, &["rev-parse", "--git-common-dir"])
-            .map_err(|_| format!("{} is not in a git repository (run `git init` there first)", dir.display()))?;
+        let common = git(dir, &["rev-parse", "--git-common-dir"]).map_err(|_| {
+            format!(
+                "{} is not in a git repository (run `git init` there first)",
+                dir.display()
+            )
+        })?;
         let git_dir = fs_absolute(&dir.join(common));
         let root = match git_dir.file_name() {
-            Some(name) if name == ".git" => git_dir.parent().map(Path::to_path_buf).unwrap_or(git_dir.clone()),
+            Some(name) if name == ".git" => git_dir
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or(git_dir.clone()),
             _ => git_dir.clone(),
         };
         Ok(Repo { git_dir, root })
@@ -63,13 +81,22 @@ impl Repo {
 
     fn git_in(&self, args: &[&str], input: Option<&str>) -> Res<String> {
         let mut command = Command::new("git");
-        command.arg("--git-dir").arg(&self.git_dir).current_dir(&self.root);
+        command
+            .arg("--git-dir")
+            .arg(&self.git_dir)
+            .current_dir(&self.root);
         run(command, args, input)
     }
 
     /// The commit a name stands for, if git knows it.
     pub fn commit_of(&self, what: &str) -> Option<String> {
-        self.git(&["rev-parse", "--verify", "--quiet", &format!("{what}^{{commit}}")]).ok()
+        self.git(&[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("{what}^{{commit}}"),
+        ])
+        .ok()
     }
 
     /// Get one branch from the remote `origin`, as `origin/BRANCH`. Never asks
@@ -81,12 +108,31 @@ impl Repo {
             .arg(&self.git_dir)
             .current_dir(&self.root)
             .env("GIT_TERMINAL_PROMPT", "0")
-            .env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes -o ConnectTimeout=10");
-        run(command, &["fetch", "--quiet", "origin", &format!("+refs/heads/{branch}:refs/remotes/origin/{branch}")], None).map(|_| ())
+            .env(
+                "GIT_SSH_COMMAND",
+                "ssh -o BatchMode=yes -o ConnectTimeout=10",
+            );
+        run(
+            command,
+            &[
+                "fetch",
+                "--quiet",
+                "origin",
+                &format!("+refs/heads/{branch}:refs/remotes/origin/{branch}"),
+            ],
+            None,
+        )
+        .map(|_| ())
     }
 
     pub fn has_branch(&self, branch: &str) -> bool {
-        self.git(&["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).is_ok()
+        self.git(&[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ])
+        .is_ok()
     }
 
     /// Take a kernel's name in this repository, for good. Nothing else may be
@@ -139,8 +185,12 @@ pub fn not_committable(dir: &Path, branch: &str) -> Option<String> {
     }
     match git(dir, &["symbolic-ref", "--short", "-q", "HEAD"]) {
         Ok(current) if current == branch => None,
-        Ok(current) => Some(format!("the directory is on branch `{current}`, not on `{branch}`")),
-        Err(_) => Some(format!("the directory is on no branch (detached), not on `{branch}`")),
+        Ok(current) => Some(format!(
+            "the directory is on branch `{current}`, not on `{branch}`"
+        )),
+        Err(_) => Some(format!(
+            "the directory is on no branch (detached), not on `{branch}`"
+        )),
     }
 }
 
@@ -151,14 +201,35 @@ pub fn commit_all(dir: &Path, author: &str, message: &str) -> Res<Option<String>
     if git(dir, &["status", "--porcelain"])?.is_empty() {
         return Ok(None);
     }
-    git(dir, &["-c", &format!("user.name={author}"), "commit", "--quiet", "-m", message])?;
+    git(
+        dir,
+        &[
+            "-c",
+            &format!("user.name={author}"),
+            "commit",
+            "--quiet",
+            "-m",
+            message,
+        ],
+    )?;
     Ok(head(dir))
 }
 
 /// Commit even though nothing changed. A new process always gets a first
 /// commit, so that its branch exists from the moment it does.
 pub fn commit_empty(dir: &Path, author: &str, message: &str) -> Res<()> {
-    git(dir, &["-c", &format!("user.name={author}"), "commit", "--quiet", "--allow-empty", "-m", message])?;
+    git(
+        dir,
+        &[
+            "-c",
+            &format!("user.name={author}"),
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            message,
+        ],
+    )?;
     Ok(())
 }
 
@@ -178,8 +249,12 @@ pub enum Start<'a> {
 pub fn worktree_add(repo: &Repo, path: &Path, branch: &str, start: Start) -> Res<()> {
     let path = path.to_string_lossy();
     match start {
-        Start::Nothing => repo.git(&["worktree", "add", "--quiet", "--lock", "--orphan", "-b", branch, &path])?,
-        Start::From(commit) => repo.git(&["worktree", "add", "--quiet", "--lock", "-b", branch, &path, commit])?,
+        Start::Nothing => repo.git(&[
+            "worktree", "add", "--quiet", "--lock", "--orphan", "-b", branch, &path,
+        ])?,
+        Start::From(commit) => repo.git(&[
+            "worktree", "add", "--quiet", "--lock", "-b", branch, &path, commit,
+        ])?,
         Start::Existing => repo.git(&["worktree", "add", "--quiet", "--lock", &path, branch])?,
     };
     Ok(())

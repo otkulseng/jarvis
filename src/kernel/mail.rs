@@ -7,15 +7,29 @@ use super::*;
 impl Kernel {
     /// Whether this kernel has ever heard of a kernel of that name.
     pub(super) fn knows(&self, kernel: &str) -> bool {
-        self.table.contains_key(kernel) || self.db.query_row("SELECT 1 FROM kernels WHERE name = ?1", [kernel], |_| Ok(())).is_ok()
+        self.table.contains_key(kernel)
+            || self
+                .db
+                .query_row(
+                    "SELECT 1 FROM kernels WHERE name = ?1",
+                    [kernel],
+                    |_| Ok(()),
+                )
+                .is_ok()
     }
 
     /// Why nothing can be asked of a kernel right now, and what to do.
     pub(super) fn out_of_reach(&self, kernel: &str) -> String {
         if self.knows(kernel) {
-            format!("the kernel `{kernel}` cannot be reached from `{}` right now (`jarvis kernels` shows which can, `jarvis link` why a link is down)", self.me)
+            format!(
+                "the kernel `{kernel}` cannot be reached from `{}` right now (`jarvis kernels` shows which can, `jarvis link` why a link is down)",
+                self.me
+            )
         } else {
-            format!("no kernel called `{kernel}` is known to `{}` (`jarvis kernels` lists those that are; `jarvis link` connects to one)", self.me)
+            format!(
+                "no kernel called `{kernel}` is known to `{}` (`jarvis kernels` lists those that are; `jarvis link` connects to one)",
+                self.me
+            )
         }
     }
 
@@ -37,10 +51,15 @@ impl Kernel {
     /// is given up, and whoever sent it is told.
     pub(super) fn close_kernel(&mut self, name: &str, by: &str) -> Res<Value> {
         if name == self.me {
-            return Err("that is this kernel, and it is running. Ctrl-C where it runs stops it".into());
+            return Err(
+                "that is this kernel, and it is running. Ctrl-C where it runs stops it".into(),
+            );
         }
         if self.table.contains_key(name) {
-            return Err(format!("the kernel `{name}` can be reached right now, so it is not gone (`jarvis kernels`)").into());
+            return Err(format!(
+                "the kernel `{name}` can be reached right now, so it is not gone (`jarvis kernels`)"
+            )
+            .into());
         }
         if !self.knows(name) {
             return Err(self.out_of_reach(name).into());
@@ -48,8 +67,11 @@ impl Kernel {
         let me = self.addr(KERNEL);
         self.rec(&me, "closed", json!({"kernel": name, "by": by}))?;
         let held: Vec<(String, String)> = {
-            let mut stmt = self.db.prepare("SELECT id, payload FROM outbox WHERE dest = ?1")?;
-            stmt.query_map([name], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?
+            let mut stmt = self
+                .db
+                .prepare("SELECT id, payload FROM outbox WHERE dest = ?1")?;
+            stmt.query_map([name], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<Result<_, _>>()?
         };
         let why = format!("the kernel `{name}` is taken to be gone (said {by})");
         let mut given_up = 0;
@@ -63,7 +85,12 @@ impl Kernel {
                 given_up += 1;
             }
         }
-        Ok(said(vec![format!("{name} is taken to be gone; {given_up} message(s) that waited here for it were given up")], vec![]))
+        Ok(said(
+            vec![format!(
+                "{name} is taken to be gone; {given_up} message(s) that waited here for it were given up"
+            )],
+            vec![],
+        ))
     }
 
     /// Check where a message is to go, or say why it cannot be sent there.
@@ -89,7 +116,9 @@ impl Kernel {
         if kernel_of(to) == self.me {
             if let Some(proc) = self.find(name_of(to))? {
                 if proc.status != "alive" {
-                    notes.push(format!("{to} is stopped; the message waits until `jarvis start {to}`"));
+                    notes.push(format!(
+                        "{to} is stopped; the message waits until `jarvis start {to}`"
+                    ));
                 } else if proc.failures > 0 && proc.harness == NO_AGENT {
                     notes.push(format!("the code of {to} failed on the last {} message(s) it got (`jarvis ps {to}` shows why)", proc.failures));
                 } else if proc.failures > 0 {
@@ -107,7 +136,14 @@ impl Kernel {
 
     /// Have another kernel carry out a command. It travels as a message to
     /// that kernel: kept on the way, carried out once.
-    pub(super) fn request(&mut self, kernel: &str, by: &str, argv: &[String], extra: Value, outcome: Sender<Value>) -> Res<Value> {
+    pub(super) fn request(
+        &mut self,
+        kernel: &str,
+        by: &str,
+        argv: &[String],
+        extra: Value,
+        outcome: Sender<Value>,
+    ) -> Res<Value> {
         if let Some(why) = self.refuses(kernel) {
             return Err(why.into());
         }
@@ -143,9 +179,10 @@ impl Kernel {
         let mut message = json!({"from": from, "to": to, "body": body});
         // What its sender had been given when it wrote this: the turn it is in.
         if kernel_of(from) == self.me
-            && let Some(turn) = self.live.get(name_of(from)).and_then(|l| l.turn) {
-                message["turn"] = json!(turn);
-            }
+            && let Some(turn) = self.live.get(name_of(from)).and_then(|l| l.turn)
+        {
+            message["turn"] = json!(turn);
+        }
         self.post_item(from, message)
     }
 
@@ -163,7 +200,10 @@ impl Kernel {
             }
         } else {
             item["at"] = json!(index::now_ms());
-            self.db.execute("INSERT OR IGNORE INTO outbox (id, dest, payload) VALUES (?1, ?2, ?3)", params![id, dest, item.to_string()])?;
+            self.db.execute(
+                "INSERT OR IGNORE INTO outbox (id, dest, payload) VALUES (?1, ?2, ?3)",
+                params![id, dest, item.to_string()],
+            )?;
             self.pump_outbox();
         }
         Ok(id)
@@ -172,7 +212,9 @@ impl Kernel {
     /// Tell the kernel a message came from how far it got here. It travels
     /// back like a message: kept on the way, taken once.
     pub(super) fn receipt(&mut self, message: &str, status: &str, extra: Value) {
-        let Some((origin, _)) = message.split_once(':') else { return };
+        let Some((origin, _)) = message.split_once(':') else {
+            return;
+        };
         if origin == self.me {
             return;
         }
@@ -190,7 +232,12 @@ impl Kernel {
     /// A message can never be delivered: write that down and let whoever
     /// sent it know, here or through the kernel it came from.
     pub(super) fn undeliverable(&mut self, id: &str, why: &str) -> Res<()> {
-        let to: Option<String> = self.db.query_row("SELECT recipient FROM messages WHERE id = ?1", [id], |r| r.get(0)).ok();
+        let to: Option<String> = self
+            .db
+            .query_row("SELECT recipient FROM messages WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .ok();
         let about = to.unwrap_or_else(|| self.addr(KERNEL));
         self.rec(&about, "undeliverable", json!({"message": id, "why": why}))?;
         if id.split(':').next() == Some(self.me.as_str()) {
@@ -204,35 +251,66 @@ impl Kernel {
     /// A message sent from here could not be delivered: whoever sent it hears of it.
     pub(super) fn came_back(&mut self, id: &str, why: &str) -> Res<()> {
         if let Some(waiter) = self.waiters.remove(id)
-            && waiter.send(json!({"code": 1, "o": [], "e": [why]})).is_ok() {
-                return Ok(());
-            }
-        let Ok((sender, to)) = self.db.query_row("SELECT sender, recipient FROM messages WHERE id = ?1", [id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) else {
+            && waiter.send(json!({"code": 1, "o": [], "e": [why]})).is_ok()
+        {
+            return Ok(());
+        }
+        let Ok((sender, to)) = self.db.query_row(
+            "SELECT sender, recipient FROM messages WHERE id = ?1",
+            [id],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        ) else {
             return Ok(());
         };
-        self.tell(&sender, &format!("[jarvis] Your message {id} to {to} could not be delivered: {why}."))
+        self.tell(
+            &sender,
+            &format!("[jarvis] Your message {id} to {to} could not be delivered: {why}."),
+        )
     }
 
     /// The kernel a message went to says how far it got there.
     pub(super) fn take_receipt(&mut self, item: &Value) -> Res<()> {
-        let (message, status) = (item["message"].as_str().unwrap_or(""), item["status"].as_str().unwrap_or(""));
-        let Ok((sender, to, body)) = self.db.query_row("SELECT sender, recipient, body FROM messages WHERE id = ?1", [message], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
-        }) else {
+        let (message, status) = (
+            item["message"].as_str().unwrap_or(""),
+            item["status"].as_str().unwrap_or(""),
+        );
+        let Ok((sender, to, body)) = self.db.query_row(
+            "SELECT sender, recipient, body FROM messages WHERE id = ?1",
+            [message],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            },
+        ) else {
             return Ok(());
         };
         self.rec(&sender, "receipt", json!({"message": message, "status": status, "result": item["result"], "by": item["from"]}))?;
         if status == "undeliverable" {
-            return self.came_back(message, item["result"].as_str().unwrap_or("it could not be delivered"));
+            return self.came_back(
+                message,
+                item["result"]
+                    .as_str()
+                    .unwrap_or("it could not be delivered"),
+            );
         }
         // What came of a request. A command that still waits for it prints
         // it; otherwise whoever asked is told.
         if item.get("code").is_some() {
             if let Some(waiter) = self.waiters.remove(message)
-                && waiter.send(json!({"code": item["code"], "o": item["o"], "e": item["e"]})).is_ok() {
-                    return Ok(());
-                }
-            let outcome = if status == "handled" { "was carried out" } else { "could not be carried out" };
+                && waiter
+                    .send(json!({"code": item["code"], "o": item["o"], "e": item["e"]}))
+                    .is_ok()
+            {
+                return Ok(());
+            }
+            let outcome = if status == "handled" {
+                "was carried out"
+            } else {
+                "could not be carried out"
+            };
             let result = item["result"].as_str().unwrap_or("").trim();
             self.tell(&sender, &format!("[jarvis] Your request {message} to the kernel `{}` (`jarvis {body}`) {outcome}{}", kernel_of(&to), if result.is_empty() { ".".to_string() } else { format!(":\n{result}") }))?;
         }
@@ -242,10 +320,17 @@ impl Kernel {
     /// A request arrived for this kernel: carry it out, on a thread of its
     /// own like any command.
     pub(super) fn carry_out(&mut self, item: &Value) {
-        let (Some(id), Some(from)) = (item["id"].as_str(), item["from"].as_str()) else { return };
+        let (Some(id), Some(from)) = (item["id"].as_str(), item["from"].as_str()) else {
+            return;
+        };
         let mut request = item["request"].clone();
         request["by"] = json!(from);
-        let (cfg, tx, shared, id) = (self.cfg.clone(), self.tx.clone(), self.shared.clone(), id.to_string());
+        let (cfg, tx, shared, id) = (
+            self.cfg.clone(),
+            self.tx.clone(),
+            self.shared.clone(),
+            id.to_string(),
+        );
         thread::spawn(move || {
             let body = serve::answer(cfg, tx.clone(), shared, request);
             let _ = tx.send(Event::RequestDone { id, body });
@@ -256,25 +341,53 @@ impl Kernel {
     /// kernel it came from.
     pub(super) fn request_done(&mut self, id: &str, body: &Value) {
         let code = body["code"].as_i64().unwrap_or(1);
-        let lines = |key: &str| -> Vec<String> { body[key].as_array().map(|a| a.iter().filter_map(|l| l.as_str().map(str::to_string)).collect()).unwrap_or_default() };
+        let lines = |key: &str| -> Vec<String> {
+            body[key]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|l| l.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
         let result = [lines("o"), lines("e")].concat().join("\n");
         let me = self.addr(KERNEL);
-        self.note(&me, "request_done", json!({"message": id, "code": code, "result": result}));
-        self.receipt(id, if code == 0 { "handled" } else { "failed" }, json!({"code": code, "o": body["o"], "e": body["e"], "result": result}));
+        self.note(
+            &me,
+            "request_done",
+            json!({"message": id, "code": code, "result": result}),
+        );
+        self.receipt(
+            id,
+            if code == 0 { "handled" } else { "failed" },
+            json!({"code": code, "o": body["o"], "e": body["e"], "result": result}),
+        );
     }
 
     /// Hand what is held for other kernels to the links that lead there.
     pub(super) fn pump_outbox(&mut self) {
         let held: Vec<(String, String, String)> = {
-            let Ok(mut stmt) = self.db.prepare_cached("SELECT id, dest, payload FROM outbox") else { return };
-            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).map(|rows| rows.flatten().collect()).unwrap_or_default()
+            let Ok(mut stmt) = self
+                .db
+                .prepare_cached("SELECT id, dest, payload FROM outbox")
+            else {
+                return;
+            };
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .map(|rows| rows.flatten().collect())
+                .unwrap_or_default()
         };
         for (id, dest, payload) in held {
             if self.awaiting.contains_key(&id) || self.paused.contains(&id) {
                 continue;
             }
-            let Some(link) = self.table.get(&dest).map(|k| k.link) else { continue };
-            let Ok(mut item) = serde_json::from_str::<Value>(&payload) else { continue };
+            let Some(link) = self.table.get(&dest).map(|k| k.link) else {
+                continue;
+            };
+            let Ok(mut item) = serde_json::from_str::<Value>(&payload) else {
+                continue;
+            };
             item["hops"] = json!(item["hops"].as_i64().unwrap_or(0) + 1);
             if self.say(link, json!({"t": "msg", "m": item})) {
                 self.awaiting.insert(id, link);
@@ -285,9 +398,15 @@ impl Kernel {
     /// Something arrived over a link: a message or a request for someone
     /// here, word about a message sent from here, or something to pass on.
     pub(super) fn receive(&mut self, link: u64, item: &Value) {
-        let (Some(id), Some(to)) = (item["id"].as_str(), item["to"].as_str()) else { return };
+        let (Some(id), Some(to)) = (item["id"].as_str(), item["to"].as_str()) else {
+            return;
+        };
         let is_receipt = item["kind"] == "receipt";
-        let peer = self.links.get(&link).and_then(|l| l.peer.clone()).unwrap_or_default();
+        let peer = self
+            .links
+            .get(&link)
+            .and_then(|l| l.peer.clone())
+            .unwrap_or_default();
         let result = (|| -> Res<()> {
             let dest = kernel_of(to);
             if dest != self.me {
@@ -298,18 +417,28 @@ impl Kernel {
                     return Ok(());
                 }
                 // Kept until the next kernel on the way has confirmed it.
-                let added = self.db.execute("INSERT OR IGNORE INTO outbox (id, dest, payload) VALUES (?1, ?2, ?3)", params![id, dest, item.to_string()])?;
+                let added = self.db.execute(
+                    "INSERT OR IGNORE INTO outbox (id, dest, payload) VALUES (?1, ?2, ?3)",
+                    params![id, dest, item.to_string()],
+                )?;
                 if added > 0 && item["hops"].as_i64().unwrap_or(0) > MOST_HOPS {
                     // It is going in circles: the kernels disagree, for now, about the way.
                     self.paused.insert(id.to_string());
                     let mut fresh = item.clone();
                     fresh["hops"] = json!(0);
-                    self.db.execute("UPDATE outbox SET payload = ?2 WHERE id = ?1", params![id, fresh.to_string()])?;
+                    self.db.execute(
+                        "UPDATE outbox SET payload = ?2 WHERE id = ?1",
+                        params![id, fresh.to_string()],
+                    )?;
                 }
                 return Ok(());
             }
             // What arrives a second time (its confirmation was lost) arrives once.
-            if self.db.execute("INSERT OR IGNORE INTO seen (id) VALUES (?1)", [id])? == 0 {
+            if self
+                .db
+                .execute("INSERT OR IGNORE INTO seen (id) VALUES (?1)", [id])?
+                == 0
+            {
                 return Ok(());
             }
             if is_receipt {
@@ -347,16 +476,31 @@ impl Kernel {
             return;
         }
         self.awaiting.remove(id);
-        let payload: Option<String> = self.db.query_row("SELECT payload FROM outbox WHERE id = ?1", [id], |r| r.get(0)).ok();
+        let payload: Option<String> = self
+            .db
+            .query_row("SELECT payload FROM outbox WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .ok();
         let _ = self.db.execute("DELETE FROM outbox WHERE id = ?1", [id]);
-        let next = self.links.get(&link).and_then(|l| l.peer.clone()).unwrap_or_default();
-        let item: Value = payload.and_then(|p| serde_json::from_str(&p).ok()).unwrap_or(Value::Null);
+        let next = self
+            .links
+            .get(&link)
+            .and_then(|l| l.peer.clone())
+            .unwrap_or_default();
+        let item: Value = payload
+            .and_then(|p| serde_json::from_str(&p).ok())
+            .unwrap_or(Value::Null);
         // That a message went on is worth writing down; word about one is not.
         if item["kind"] != "receipt" {
             // About its sender if that is a process here; else it is this
             // kernel's own doing, passing on what came from elsewhere.
             let from = item["from"].as_str().unwrap_or("");
-            let about = if kernel_of(from) == self.me { from.to_string() } else { self.addr(KERNEL) };
+            let about = if kernel_of(from) == self.me {
+                from.to_string()
+            } else {
+                self.addr(KERNEL)
+            };
             self.note(&about, "forward", json!({"message": id, "next": next}));
         }
     }

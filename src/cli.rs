@@ -21,7 +21,10 @@ pub struct Cli {
 /// The commands in the order they are listed, under these headings.
 const GROUPS: &[(&str, &[&str])] = &[
     ("Kernels", &["up", "kernels", "link"]),
-    ("Processes", &["spawn", "ps", "tag", "stop", "start", "remove"]),
+    (
+        "Processes",
+        &["spawn", "ps", "tag", "stop", "start", "remove"],
+    ),
     ("Talking", &["send", "messages"]),
     ("Looking", &["show", "log", "watch"]),
 ];
@@ -41,7 +44,9 @@ pub fn overview() -> String {
     for (heading, names) in GROUPS {
         text.push_str(&format!("\n{heading}\n"));
         for name in *names {
-            let sub = command.find_subcommand(name).expect("every listed command exists");
+            let sub = command
+                .find_subcommand(name)
+                .expect("every listed command exists");
             let about = sub.get_about().map(|a| a.to_string()).unwrap_or_default();
             text.push_str(&format!("  {name:<9} {about}\n"));
         }
@@ -72,7 +77,8 @@ pub fn overview() -> String {
 #[derive(Subcommand)]
 pub enum Cmd {
     /// Run a kernel: the program that hosts processes and passes messages on
-    #[command(long_about = "Run a kernel: the program that hosts processes and passes messages on.\n\n\
+    #[command(
+        long_about = "Run a kernel: the program that hosts processes and passes messages on.\n\n\
         Leave it running in a terminal. A kernel:\n\
         \x20 - hosts processes: gives each its waiting messages (its handler, then its agent),\n\
         \x20   keeps its service running, and commits what it changed after each turn;\n\
@@ -110,7 +116,8 @@ pub enum Cmd {
         stops it, together with every service and every turn in progress. Nothing is lost: messages that were being worked on are \
         given again, marked as such, the next time it runs. The same holds if it is \
         killed, except with scratch: then it starts from what was last saved, and \
-        what it did after that is lost. Nothing starts a kernel again by itself.")]
+        what it did after that is lost. Nothing starts a kernel again by itself."
+    )]
     #[command(after_long_help = "Examples:\n\
         \x20 jarvis up laptop\n\
         \x20 JARVIS_STORE=/n/proj/jarvis-store JARVIS_SCRATCH=/tmp/$USER/jarvis jarvis up cannon-sweep --repo /n/proj/jarvis\n\
@@ -121,7 +128,8 @@ pub enum Cmd {
     Harness(Harness),
 
     /// The kernels this one has heard of, and whether each can be reached
-    #[command(long_about = "The kernels this one has heard of, and whether each can be reached.\n\n\
+    #[command(
+        long_about = "The kernels this one has heard of, and whether each can be reached.\n\n\
         One line per kernel: this one, those that can be reached over links now (and \
         through which neighbour, how many links away), and those that could be reached \
         before. For each, the version of jarvis it runs.\n\n\
@@ -129,8 +137,11 @@ pub enum Cmd {
         waits, for as long as it takes. Whether it is gone for good is for you to \
         judge. --close NAME says that you take it to be gone: what was waiting here \
         for it is given up (whoever sent it is told), and new mail for it is refused. \
-        If it is reached again, it counts as there again.")]
-    #[command(after_long_help = "Examples:\n  jarvis kernels\n  jarvis kernels --close cannon-4471")]
+        If it is reached again, it counts as there again."
+    )]
+    #[command(
+        after_long_help = "Examples:\n  jarvis kernels\n  jarvis kernels --close cannon-4471"
+    )]
     Kernels(Kernels),
 
     /// Connect this kernel to another
@@ -174,7 +185,8 @@ pub enum Cmd {
     Link(Link),
 
     /// Create a process on a kernel, or carry one on there
-    #[command(long_about = "Create a process on a kernel, or carry one on there.\n\n\
+    #[command(
+        long_about = "Create a process on a kernel, or carry one on there.\n\n\
         ADDRESS is `NAME@KERNEL`: the process NAME on the kernel KERNEL. It is also \
         the name of its git branch, which is checked out as its own directory. A \
         kernel runs a name at most once. The same name may run on other kernels: \
@@ -204,7 +216,8 @@ pub enum Cmd {
         there like a message, and waits on the way if a link is down. If the answer \
         is not back within 20 seconds, the command says so and exits with 2; the \
         request is still carried out when it gets there, and what came of it is in \
-        `jarvis messages`.")]
+        `jarvis messages`."
+    )]
     #[command(after_long_help = "Examples:\n\
         \x20 jarvis spawn scratch@laptop\n\
         \x20     A blank process, waiting for its first message.\n\n\
@@ -222,7 +235,8 @@ pub enum Cmd {
     Spawn(Spawn),
 
     /// Who exists and what each is doing; or everything about one process
-    #[command(long_about = "Who exists and what each is doing; or everything about one process.\n\n\
+    #[command(
+        long_about = "Who exists and what each is doing; or everything about one process.\n\n\
         \x20 jarvis ps                    the processes on this kernel\n\
         \x20 jarvis ps @cannon-a @node2   those on these kernels\n\
         \x20 jarvis ps --all              those on every kernel known here\n\
@@ -244,8 +258,11 @@ pub enum Cmd {
         `from`, `tags`, `branch`, `harness`, `created_at`, `turns`, `cost_usd`, \
         `mail_waiting`, `busy_since`, `failures`, `directory`, `has_run`, \
         `has_handle`. For one process it prints that one object, with `commit`, \
-        `service_pid` and `last_turn` as well. Times are milliseconds since 1970.")]
-    #[command(after_long_help = "Examples:\n  jarvis ps\n  jarvis ps --all\n  jarvis ps lammps@cannon-a\n  jarvis ps @cannon-a --json")]
+        `service_pid` and `last_turn` as well. Times are milliseconds since 1970."
+    )]
+    #[command(
+        after_long_help = "Examples:\n  jarvis ps\n  jarvis ps --all\n  jarvis ps lammps@cannon-a\n  jarvis ps @cannon-a --json"
+    )]
     Ps(Ps),
 
     /// End what a process is doing now; its mail waits
@@ -257,7 +274,9 @@ pub enum Cmd {
         short are then given to it again, marked as such.\n\n\
         A process on another kernel is stopped by that kernel; see `jarvis help spawn` \
         for how such a request travels.")]
-    #[command(after_long_help = "Examples:\n  jarvis stop lammps@laptop\n  jarvis stop lammps@laptop gpu@laptop flux@cannon-sweep")]
+    #[command(
+        after_long_help = "Examples:\n  jarvis stop lammps@laptop\n  jarvis stop lammps@laptop gpu@laptop flux@cannon-sweep"
+    )]
     Stop(Who),
 
     /// Let a stopped process go on
@@ -269,7 +288,8 @@ pub enum Cmd {
     Start(Who),
 
     /// Take a process off its kernel: its directory and branch go, what was written down stays
-    #[command(long_about = "Take a process off its kernel: its directory and branch go, what was written down stays.\n\n\
+    #[command(
+        long_about = "Take a process off its kernel: its directory and branch go, what was written down stays.\n\n\
         What it is doing is ended first, as with `jarvis stop`. Then its directory \
         and its branch are deleted, and so is what its agent remembered from turn to \
         turn. Everything that was written down about it stays: \
@@ -280,12 +300,16 @@ pub enum Cmd {
         brings the files back for as long as git still has them (weeks, by default). \
         With --keep-branch the branch stays, and `jarvis spawn` with the same address \
         carries on from it. Use that when a process has moved to another kernel.\n\n\
-        A process cannot remove itself.")]
-    #[command(after_long_help = "Examples:\n  jarvis remove scratch@laptop\n  jarvis remove page0@laptop page1@laptop\n  jarvis remove lammps@laptop --keep-branch")]
+        A process cannot remove itself."
+    )]
+    #[command(
+        after_long_help = "Examples:\n  jarvis remove scratch@laptop\n  jarvis remove page0@laptop page1@laptop\n  jarvis remove lammps@laptop --keep-branch"
+    )]
     Remove(Remove),
 
     /// Say what a process belongs to: a project, a place, anything
-    #[command(long_about = "Say what a process belongs to: a project, a place, anything.\n\n\
+    #[command(
+        long_about = "Say what a process belongs to: a project, a place, anything.\n\n\
         A tag is a name with a value, such as `project=moe` or `place=cluster one`. \
         A process has at most one value for each name. Tags are free-form: jarvis \
         stores and reports them (`jarvis ps`, `jarvis watch`) and gives them no \
@@ -293,7 +317,8 @@ pub enum Cmd {
         processes by. Every process also counts as tagged `kernel=` with the kernel \
         it is on.\n\n\
         Anyone may tag any process. `NAME=` with nothing after it removes that tag. \
-        Without any tags given, the process's tags are printed.")]
+        Without any tags given, the process's tags are printed."
+    )]
     #[command(after_long_help = "Examples:\n\
         \x20 jarvis tag lammps1@laptop project=moe\n\
         \x20 jarvis tag lammps1@laptop \"place=cluster one\" role=lead\n\
@@ -334,7 +359,8 @@ pub enum Cmd {
     Send(SendArgs),
 
     /// Read messages: those of a kernel, or those to and from one process
-    #[command(long_about = "Read messages: those of a kernel, or those to and from one process.\n\n\
+    #[command(
+        long_about = "Read messages: those of a kernel, or those to and from one process.\n\n\
         \x20 jarvis messages                    every message this kernel sent or received\n\
         \x20 jarvis messages lammps@cannon-a    those to and from that process (asked of\n\
         \x20                                    its kernel)\n\
@@ -354,7 +380,8 @@ pub enum Cmd {
         --json prints a list of objects: `id`, `at`, `from`, `to`, `body`, `status` \
         (sent, forwarded, pending, taken, handled, dropped, undeliverable, failed), \
         `attempts`, `result`, `kernel` (who answered) and `seq` (the number of the \
-        fact that brought it there, as in `jarvis log --json`).")]
+        fact that brought it there, as in `jarvis log --json`)."
+    )]
     #[command(after_long_help = "Examples:\n\
         \x20 jarvis messages                                    the last 20 messages here\n\
         \x20 jarvis messages polaris@laptop -n 5                the last 5 to or from polaris\n\
@@ -363,14 +390,16 @@ pub enum Cmd {
     Messages(Messages),
 
     /// Look at the files of a process: its code and its notes
-    #[command(long_about = "Look at the files of a process: its code and its notes.\n\n\
+    #[command(
+        long_about = "Look at the files of a process: its code and its notes.\n\n\
         Without PATH: the names of all files on the process's branch. With PATH: the \
         content of that file. This shows what is committed, which is everything up to \
         the end of the process's last turn. Reading is always allowed and disturbs \
         nobody; a process's notes are in its `.jarvis/` directory.\n\n\
         The branch is read from this kernel's repository if it is there (kernels of \
         one site share a repository, and a branch outlives its process and its \
-        kernel); otherwise the process's own kernel is asked.")]
+        kernel); otherwise the process's own kernel is asked."
+    )]
     #[command(after_long_help = "Examples:\n\
         \x20 jarvis show polaris@laptop\n\
         \x20 jarvis show polaris@laptop .jarvis/ABOUT.md\n\
@@ -378,7 +407,8 @@ pub enum Cmd {
     Show(Show),
 
     /// What happened: every turn, message, commit and failure, in order
-    #[command(long_about = "What happened: every turn, message, commit and failure, in order.\n\n\
+    #[command(
+        long_about = "What happened: every turn, message, commit and failure, in order.\n\n\
         A kernel writes down each thing it does or sees as a record: a message sent, \
         passed on or arrived, a turn started, finished (with what it cost) or failed \
         (with the error), a commit, a service starting or exiting, a process being \
@@ -393,7 +423,8 @@ pub enum Cmd {
         line is when it happened.\n\n\
         --json prints a list of objects: `id` (the record's place in its kernel's \
         order), `kernel`, `n` (its number there; empty for a step), `at`, `proc` (who \
-        it is about), `kind` and `data`.")]
+        it is about), `kind` and `data`."
+    )]
     #[command(after_long_help = "Examples:\n\
         \x20 jarvis log                       the last 30 records here\n\
         \x20 jarvis log -f --all              keep printing as things happen anywhere (Ctrl-C to leave)\n\
@@ -402,7 +433,8 @@ pub enum Cmd {
     Log(Log),
 
     /// Follow every change as it happens, as JSON lines, for programs
-    #[command(long_about = "Follow every change as it happens, as JSON lines, for programs.\n\n\
+    #[command(
+        long_about = "Follow every change as it happens, as JSON lines, for programs.\n\n\
         Prints one JSON object per line and keeps running. It is how a program (a \
         page, a monitor, a process's own code) stays up to date without asking again \
         and again. What is followed is said as for `jarvis ps`: this kernel, or the \
@@ -426,7 +458,8 @@ pub enum Cmd {
         kernels is reported by both. Without --after, only facts from now on; with \
         `--after KERNEL:N`, also that kernel's earlier facts above N. A program that \
         is cut off starts again with --after set, for each kernel, to the `id` of the \
-        last fact it saw from it.")]
+        last fact it saw from it."
+    )]
     #[command(after_long_help = "Examples:\n\
         \x20 jarvis watch                              this kernel, from now on\n\
         \x20 jarvis watch --all --steps                everything reachable, also each step agents take\n\
@@ -494,8 +527,10 @@ pub struct Spawn {
     pub prompt_file: Option<String>,
 
     /// Start from a git branch (an expert's, or a process's), tag or commit
-    #[arg(long, value_name = "WHAT",
-          long_help = "Start from a git branch (an expert's, or a process's), tag or commit.\n\n\
+    #[arg(
+        long,
+        value_name = "WHAT",
+        long_help = "Start from a git branch (an expert's, or a process's), tag or commit.\n\n\
               The new process gets the same files and the same history on a branch of its own, \
               so work can later be merged in either direction. Everything comes along, the \
               `.jarvis/` directory included (prompt, notes, service, tools), but no \
@@ -504,18 +539,23 @@ pub struct Spawn {
               land their finished work on. A process's own branch is its address, \
               `NAME@KERNEL`. WHAT is a branch, tag or commit in the repository of the kernel that \
               creates the process; or else a branch on its remote `origin`, which is fetched \
-              at that moment.")]
+              at that moment."
+    )]
     pub from: Option<String>,
 
     /// Which kind of agent runs it: `claude`, or `none`
-    #[arg(long, value_name = "NAME", default_value = "claude",
-          long_help = "Which kind of agent runs it: `claude` (Claude Code), or `none`.\n\n\
+    #[arg(
+        long,
+        value_name = "NAME",
+        default_value = "claude",
+        long_help = "Which kind of agent runs it: `claude` (Claude Code), or `none`.\n\n\
               An agent keeps what it remembers from turn to turn in the store, under its \
               address, so it carries on wherever its kernel runs. A Claude agent needs the \
               kernel to have been started with $CLAUDE_CODE_OAUTH_TOKEN (`jarvis help up`).\n\n\
               With `none` the process has no agent. Its code deals with its messages \
               (`.jarvis/handle`), and it is never sent notices meant for an agent. A message \
-              its code does not take goes back to whoever sent it, as not read.")]
+              its code does not take goes back to whoever sent it, as not read."
+    )]
     pub harness: String,
 
     /// A tag for it, such as `project=moe` (see `jarvis help tag`). Can be given several times

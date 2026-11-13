@@ -27,7 +27,10 @@ fn writer(mut out: impl Write + Send + 'static) -> Sender<String> {
     let (tx, rx) = mpsc::channel::<String>();
     thread::spawn(move || {
         for line in rx {
-            if out.write_all(line.as_bytes()).is_err() || out.write_all(b"\n").is_err() || out.flush().is_err() {
+            if out.write_all(line.as_bytes()).is_err()
+                || out.write_all(b"\n").is_err()
+                || out.flush().is_err()
+            {
                 break;
             }
         }
@@ -40,7 +43,9 @@ fn pump(id: u64, reader: impl BufRead, tx: &Sender<Event>) -> String {
     for line in reader.lines() {
         match line {
             Ok(line) => {
-                let Ok(value) = serde_json::from_str::<Value>(&line) else { continue };
+                let Ok(value) = serde_json::from_str::<Value>(&line) else {
+                    continue;
+                };
                 if tx.send(Event::LinkLine { id, value }).is_err() {
                     return "the kernel is stopping".into();
                 }
@@ -54,11 +59,20 @@ fn pump(id: u64, reader: impl BufRead, tx: &Sender<Event>) -> String {
 /// Another kernel (or a `jarvis link --stdio`) connected to this kernel's
 /// socket and asked to be a link. Runs until the link ends.
 pub fn accept(stream: UnixStream, reader: BufReader<UnixStream>, id: u64, tx: &Sender<Event>) {
-    let (Ok(out), Ok(closer)) = (stream.try_clone(), stream.try_clone()) else { return };
+    let (Ok(out), Ok(closer)) = (stream.try_clone(), stream.try_clone()) else {
+        return;
+    };
     let close: Close = Box::new(move || {
         let _ = closer.shutdown(std::net::Shutdown::Both);
     });
-    if tx.send(Event::LinkOpen { id, tx: writer(out), close }).is_err() {
+    if tx
+        .send(Event::LinkOpen {
+            id,
+            tx: writer(out),
+            close,
+        })
+        .is_err()
+    {
         return;
     }
     let why = pump(id, reader, tx);
@@ -84,11 +98,25 @@ fn connect(spec: &str, id: u64, cfg: &Config, tx: &Sender<Event>) -> Res<String>
         let close: Close = Box::new(move || {
             let _ = closer.shutdown(std::net::Shutdown::Both);
         });
-        tx.send(Event::LinkOpen { id, tx: writer(out), close }).map_err(|_| "the kernel is stopping")?;
+        tx.send(Event::LinkOpen {
+            id,
+            tx: writer(out),
+            close,
+        })
+        .map_err(|_| "the kernel is stopping")?;
         return Ok(pump(id, BufReader::new(stream), tx));
     }
-    let words: Vec<String> = v["command"].as_array().map(|a| a.iter().filter_map(|w| w.as_str().map(str::to_string)).collect()).unwrap_or_default();
-    let Some((program, args)) = words.split_first() else { return Err("the link names neither a kernel nor a command".into()) };
+    let words: Vec<String> = v["command"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|w| w.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let Some((program, args)) = words.split_first() else {
+        return Err("the link names neither a kernel nor a command".into());
+    };
     let mut child = Command::new(program)
         .args(args)
         .stdin(Stdio::piped())
@@ -114,8 +142,17 @@ fn connect(spec: &str, id: u64, cfg: &Config, tx: &Sender<Event>) -> Res<String>
         last.join(" / ")
     });
     let close: Close = Box::new(move || children::signal(pid, libc::SIGKILL));
-    tx.send(Event::LinkOpen { id, tx: writer(child.stdin.take().expect("stdin is piped")), close }).map_err(|_| "the kernel is stopping")?;
-    let why = pump(id, BufReader::new(child.stdout.take().expect("stdout is piped")), tx);
+    tx.send(Event::LinkOpen {
+        id,
+        tx: writer(child.stdin.take().expect("stdin is piped")),
+        close,
+    })
+    .map_err(|_| "the kernel is stopping")?;
+    let why = pump(
+        id,
+        BufReader::new(child.stdout.take().expect("stdout is piped")),
+        tx,
+    );
     children::signal(pid, libc::SIGKILL);
     let status = child.wait().map(|s| s.to_string()).unwrap_or_default();
     let said = said.join().unwrap_or_default();

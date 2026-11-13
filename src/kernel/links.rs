@@ -6,49 +6,87 @@ use super::*;
 impl Kernel {
     pub(super) fn link(&mut self, spec: &str, remove: bool) -> Res<Value> {
         if remove {
-            if self.db.execute("DELETE FROM links WHERE spec = ?1", [spec])? == 0 {
-                return Err("this kernel has no such link. Give it exactly as `jarvis link` lists it".into());
+            if self
+                .db
+                .execute("DELETE FROM links WHERE spec = ?1", [spec])?
+                == 0
+            {
+                return Err(
+                    "this kernel has no such link. Give it exactly as `jarvis link` lists it"
+                        .into(),
+                );
             }
             if let Some(id) = self.dials.remove(spec).and_then(|d| d.link)
-                && let Some(link) = self.links.get(&id) {
-                    (link.close)();
-                }
+                && let Some(link) = self.links.get(&id)
+            {
+                (link.close)();
+            }
             self.publish_net();
             return Ok(said(vec!["the link is forgotten".into()], vec![]));
         }
         if let Some(kernel) = serde_json::from_str::<Value>(spec)?["kernel"].as_str()
-            && kernel == self.me {
-                return Err("a kernel cannot be linked to itself".into());
-            }
-        self.db.execute("INSERT OR IGNORE INTO links (spec) VALUES (?1)", [spec])?;
+            && kernel == self.me
+        {
+            return Err("a kernel cannot be linked to itself".into());
+        }
+        self.db
+            .execute("INSERT OR IGNORE INTO links (spec) VALUES (?1)", [spec])?;
         // Asking for a link that is there already: if it is down, it is tried now.
         if let Some(dial) = self.dials.get_mut(spec) {
-            let up = dial.link.and_then(|id| self.links.get(&id)).and_then(|l| l.peer.clone());
+            let up = dial
+                .link
+                .and_then(|id| self.links.get(&id))
+                .and_then(|l| l.peer.clone());
             if let Some(peer) = up {
-                return Ok(said(vec![format!("this link is up already, to {peer}")], vec![]));
+                return Ok(said(
+                    vec![format!("this link is up already, to {peer}")],
+                    vec![],
+                ));
             }
             dial.next_try = Instant::now();
             dial.wait = Duration::from_secs(2);
             self.publish_net();
-            return Ok(said(vec!["this link is down; it is tried again now. `jarvis link` shows how it is going".into()], vec![]));
+            return Ok(said(
+                vec![
+                    "this link is down; it is tried again now. `jarvis link` shows how it is going"
+                        .into(),
+                ],
+                vec![],
+            ));
         }
         self.dials.insert(spec.to_string(), Dial::new());
         self.publish_net();
-        Ok(said(vec!["the link is being made; `jarvis link` shows how it is going".into()], vec![]))
+        Ok(said(
+            vec!["the link is being made; `jarvis link` shows how it is going".into()],
+            vec![],
+        ))
     }
 
     /// Send one line over a link. False if the link is not there.
     pub(super) fn say(&self, link: u64, line: Value) -> bool {
-        self.links.get(&link).is_some_and(|l| l.tx.send(line.to_string()).is_ok())
+        self.links
+            .get(&link)
+            .is_some_and(|l| l.tx.send(line.to_string()).is_ok())
     }
 
     /// Send a line towards a kernel, over whichever link leads there.
     pub(super) fn route_to(&self, kernel: &str, line: Value) -> bool {
-        self.table.get(kernel).is_some_and(|k| self.say(k.link, line))
+        self.table
+            .get(kernel)
+            .is_some_and(|k| self.say(k.link, line))
     }
 
     pub(super) fn link_open(&mut self, id: u64, tx: Sender<String>, close: net::Close) {
-        self.links.insert(id, Link { tx, close, peer: None, heard: Instant::now(), refused: false });
+        self.links.insert(
+            id,
+            Link {
+                tx,
+                close,
+                peer: None,
+                heard: Instant::now(),
+                refused: false,
+            },
+        );
         self.say(id, json!({"t": "hello", "name": self.me, "identity": self.cfg.identity, "version": cli::VERSION}));
     }
 
@@ -86,7 +124,9 @@ impl Kernel {
     }
 
     pub(super) fn link_line(&mut self, id: u64, v: Value) {
-        let Some(link) = self.links.get_mut(&id) else { return };
+        let Some(link) = self.links.get_mut(&id) else {
+            return;
+        };
         link.heard = Instant::now();
         let has_peer = link.peer.is_some();
         let text = |key: &str| v[key].as_str().unwrap_or("").to_string();
@@ -99,7 +139,11 @@ impl Kernel {
                 if name == self.me {
                     return self.refuse(id, &format!("both kernels are called `{name}`. Two kernels of one name cannot be linked: one of them must be started under a new name"));
                 }
-                if self.table.get(&name).is_some_and(|k| k.identity != identity) {
+                if self
+                    .table
+                    .get(&name)
+                    .is_some_and(|k| k.identity != identity)
+                {
                     return self.refuse(id, &format!("another kernel called `{name}` can already be reached from `{}`. Two kernels of one name cannot be linked: one of them must be started under a new name", self.me));
                 }
                 if let Some(link) = self.links.get_mut(&id) {
@@ -111,14 +155,29 @@ impl Kernel {
                     dial.wait = Duration::from_secs(2);
                 }
                 let me = self.addr(KERNEL);
-                self.note(&me, "link_up", json!({"kernel": name, "version": text("version")}));
+                self.note(
+                    &me,
+                    "link_up",
+                    json!({"kernel": name, "version": text("version")}),
+                );
                 // The kernel at the other end can be reached from now on.
-                self.offers.entry(id).or_default().insert(name.clone(), Known { identity, hops: 1, link: id, version: text("version") });
+                self.offers.entry(id).or_default().insert(
+                    name.clone(),
+                    Known {
+                        identity,
+                        hops: 1,
+                        link: id,
+                        version: text("version"),
+                    },
+                );
                 self.choose_routes();
                 self.advertise();
             }
             "refuse" => {
-                let why = v["why"].as_str().unwrap_or("the other kernel refused the link").to_string();
+                let why = v["why"]
+                    .as_str()
+                    .unwrap_or("the other kernel refused the link")
+                    .to_string();
                 self.link_problem(id, &why);
                 if let Some(link) = self.links.get(&id) {
                     (link.close)();
@@ -131,14 +190,22 @@ impl Kernel {
             "req" => {
                 let (rid, src, dst) = (text("rid"), text("src"), text("dst"));
                 if dst == self.me {
-                    let (cfg, tx, shared, body) = (self.cfg.clone(), self.tx.clone(), self.shared.clone(), v["body"].clone());
+                    let (cfg, tx, shared, body) = (
+                        self.cfg.clone(),
+                        self.tx.clone(),
+                        self.shared.clone(),
+                        v["body"].clone(),
+                    );
                     thread::spawn(move || {
                         let body = serve::answer(cfg, tx.clone(), shared, body);
                         let _ = tx.send(Event::Answered { rid, to: src, body });
                     });
                 } else if !self.route_to(&dst, v.clone()) {
                     let body = json!({"o": [], "e": [format!("jarvis: {}", self.out_of_reach(&dst))], "code": 1});
-                    self.route_to(&src, json!({"t": "res", "rid": rid, "dst": src, "body": body}));
+                    self.route_to(
+                        &src,
+                        json!({"t": "res", "rid": rid, "dst": src, "body": body}),
+                    );
                 }
             }
             "res" => {
@@ -158,7 +225,12 @@ impl Kernel {
                 if dst == self.me {
                     let alive = Arc::new(AtomicBool::new(true));
                     self.pubs.insert(sid.clone(), (src.clone(), alive.clone()));
-                    let (cfg, tx, shared, body) = (self.cfg.clone(), self.tx.clone(), self.shared.clone(), v["body"].clone());
+                    let (cfg, tx, shared, body) = (
+                        self.cfg.clone(),
+                        self.tx.clone(),
+                        self.shared.clone(),
+                        v["body"].clone(),
+                    );
                     thread::spawn(move || serve::publish(cfg, tx, shared, body, sid, src, alive));
                 } else if !self.route_to(&dst, v.clone()) {
                     self.route_to(&src, json!({"t": "pub", "sid": sid, "src": dst, "dst": src, "end": 1, "why": self.out_of_reach(&dst)}));
@@ -174,7 +246,10 @@ impl Kernel {
                     }
                     return;
                 }
-                let delivered = self.subs.get(&sid).is_some_and(|(_, to)| to.send(v.clone()).is_ok());
+                let delivered = self
+                    .subs
+                    .get(&sid)
+                    .is_some_and(|(_, to)| to.send(v.clone()).is_ok());
                 if !delivered || ended {
                     self.subs.remove(&sid);
                     if !ended {
@@ -242,10 +317,14 @@ impl Kernel {
     /// A neighbour said which kernels it can reach. Take over what is new or
     /// nearer, drop what it no longer offers.
     pub(super) fn learn(&mut self, id: u64, kernels: &Value) {
-        let Some(entries) = kernels.as_array() else { return };
+        let Some(entries) = kernels.as_array() else {
+            return;
+        };
         let mut offered: HashMap<String, Known> = HashMap::new();
         for e in entries {
-            let (Some(name), Some(identity)) = (e["name"].as_str(), e["identity"].as_str()) else { continue };
+            let (Some(name), Some(identity)) = (e["name"].as_str(), e["identity"].as_str()) else {
+                continue;
+            };
             let hops = e["hops"].as_u64().unwrap_or(FARTHEST) + 1;
             if name == self.me {
                 if identity != self.cfg.identity {
@@ -259,7 +338,15 @@ impl Kernel {
             if hops > FARTHEST {
                 continue;
             }
-            offered.insert(name.to_string(), Known { identity: identity.to_string(), hops, link: id, version: e["version"].as_str().unwrap_or("").to_string() });
+            offered.insert(
+                name.to_string(),
+                Known {
+                    identity: identity.to_string(),
+                    hops,
+                    link: id,
+                    version: e["version"].as_str().unwrap_or("").to_string(),
+                },
+            );
         }
         self.offers.insert(id, offered);
         self.choose_routes();
@@ -275,16 +362,31 @@ impl Kernel {
         for link in links {
             for (name, offer) in &self.offers[link] {
                 if best.get(name).is_none_or(|b| offer.hops < b.hops) {
-                    best.insert(name.clone(), Known { identity: offer.identity.clone(), hops: offer.hops, link: *link, version: offer.version.clone() });
+                    best.insert(
+                        name.clone(),
+                        Known {
+                            identity: offer.identity.clone(),
+                            hops: offer.hops,
+                            link: *link,
+                            version: offer.version.clone(),
+                        },
+                    );
                 }
             }
         }
         let same = best.len() == self.table.len()
-            && best.iter().all(|(name, new)| self.table.get(name).is_some_and(|old| old.link == new.link && old.hops == new.hops && old.version == new.version));
+            && best.iter().all(|(name, new)| {
+                self.table.get(name).is_some_and(|old| {
+                    old.link == new.link && old.hops == new.hops && old.version == new.version
+                })
+            });
         if !same {
             // A kernel that drops out of reach was last reached just now.
             for name in self.table.keys().filter(|name| !best.contains_key(*name)) {
-                let _ = self.db.execute("UPDATE kernels SET last_reached = ?2 WHERE name = ?1", params![name, index::now_ms()]);
+                let _ = self.db.execute(
+                    "UPDATE kernels SET last_reached = ?2 WHERE name = ?1",
+                    params![name, index::now_ms()],
+                );
             }
             self.table = best;
             self.routes_changed();
@@ -300,8 +402,14 @@ impl Kernel {
         }
         self.paused.clear();
         // Dropping where a subscription's lines go tells whoever reads them.
-        self.subs.retain(|_, (kernel, _)| self.table.contains_key(kernel.as_str()));
-        let gone: Vec<String> = self.pubs.iter().filter(|(_, (kernel, _))| !self.table.contains_key(kernel)).map(|(sid, _)| sid.clone()).collect();
+        self.subs
+            .retain(|_, (kernel, _)| self.table.contains_key(kernel.as_str()));
+        let gone: Vec<String> = self
+            .pubs
+            .iter()
+            .filter(|(_, (kernel, _))| !self.table.contains_key(kernel))
+            .map(|(sid, _)| sid.clone())
+            .collect();
         for sid in gone {
             self.end_pub(&sid);
         }
@@ -318,13 +426,17 @@ impl Kernel {
             if link.peer.is_none() {
                 continue;
             }
-            let mut kernels = vec![json!({"name": self.me, "identity": self.cfg.identity, "hops": 0, "version": cli::VERSION})];
+            let mut kernels = vec![
+                json!({"name": self.me, "identity": self.cfg.identity, "hops": 0, "version": cli::VERSION}),
+            ];
             for (name, k) in &self.table {
                 if k.link != *id {
                     kernels.push(json!({"name": name, "identity": k.identity, "hops": k.hops, "version": k.version}));
                 }
             }
-            let _ = link.tx.send(json!({"t": "table", "kernels": kernels}).to_string());
+            let _ = link
+                .tx
+                .send(json!({"t": "table", "kernels": kernels}).to_string());
         }
         self.publish_net();
     }
@@ -335,7 +447,12 @@ impl Kernel {
         let mut reachable: Vec<Reachable> = self
             .table
             .iter()
-            .map(|(name, k)| Reachable { name: name.clone(), hops: k.hops, via: peer_of(k.link).unwrap_or_default(), version: k.version.clone() })
+            .map(|(name, k)| Reachable {
+                name: name.clone(),
+                hops: k.hops,
+                via: peer_of(k.link).unwrap_or_default(),
+                version: k.version.clone(),
+            })
             .collect();
         reachable.sort_by(|a, b| (a.hops, &a.name).cmp(&(b.hops, &b.name)));
         let now = Instant::now();
@@ -345,11 +462,29 @@ impl Kernel {
             .map(|(spec, d)| {
                 let peer = d.link.and_then(peer_of);
                 let waiting = peer.is_none() && d.link.is_none();
-                LinkView { spec: Some(spec.clone()), peer, problem: d.problem.clone(), tries: d.tries, next_try_s: waiting.then(|| d.next_try.saturating_duration_since(now).as_secs()) }
+                LinkView {
+                    spec: Some(spec.clone()),
+                    peer,
+                    problem: d.problem.clone(),
+                    tries: d.tries,
+                    next_try_s: waiting
+                        .then(|| d.next_try.saturating_duration_since(now).as_secs()),
+                }
             })
             .collect();
         let dialled: HashSet<u64> = self.dials.values().filter_map(|d| d.link).collect();
-        links.extend(self.links.iter().filter(|(id, _)| !dialled.contains(id)).map(|(_, l)| LinkView { spec: None, peer: l.peer.clone(), problem: None, tries: 0, next_try_s: None }));
+        links.extend(
+            self.links
+                .iter()
+                .filter(|(id, _)| !dialled.contains(id))
+                .map(|(_, l)| LinkView {
+                    spec: None,
+                    peer: l.peer.clone(),
+                    problem: None,
+                    tries: 0,
+                    next_try_s: None,
+                }),
+        );
         *self.shared.net.lock().unwrap() = NetView { reachable, links };
     }
 }
@@ -359,7 +494,14 @@ pub fn link_words(spec: &str) -> String {
     let spec: Value = serde_json::from_str(spec).unwrap_or(Value::Null);
     match (spec["kernel"].as_str(), spec["command"].as_array()) {
         (Some(kernel), _) => format!("to `{kernel}` on this machine"),
-        (None, Some(words)) => format!("through `{}`", words.iter().filter_map(|w| w.as_str()).collect::<Vec<_>>().join(" ")),
+        (None, Some(words)) => format!(
+            "through `{}`",
+            words
+                .iter()
+                .filter_map(|w| w.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
         _ => "made from the other end".to_string(),
     }
 }

@@ -96,7 +96,15 @@ struct ToFollower {
 
 impl Out for ToFollower {
     fn line(&mut self, text: &str) -> bool {
-        self.alive() && self.tx.send(Event::Publish { sid: self.sid.clone(), to: self.to.clone(), item: json!({"line": text}) }).is_ok()
+        self.alive()
+            && self
+                .tx
+                .send(Event::Publish {
+                    sid: self.sid.clone(),
+                    to: self.to.clone(),
+                    item: json!({"line": text}),
+                })
+                .is_ok()
     }
     fn note(&mut self, text: &str) {
         self.notes.push(text.to_string());
@@ -118,7 +126,13 @@ pub struct Ctx {
 
 impl Ctx {
     fn of_kernel(cfg: Arc<Config>, tx: Sender<Event>, shared: Arc<Shared>) -> Res<Ctx> {
-        Ok(Ctx { me: cfg.name.clone(), conn: index::open(&cfg.db_path())?, cfg, tx, shared })
+        Ok(Ctx {
+            me: cfg.name.clone(),
+            conn: index::open(&cfg.db_path())?,
+            cfg,
+            tx,
+            shared,
+        })
     }
 
     /// The same again, for another thread.
@@ -129,8 +143,12 @@ impl Ctx {
     /// Have the kernel do something, and wait for its answer.
     fn mutate(&self, mutation: Mutation) -> Res<Value> {
         let (reply, answer) = mpsc::channel();
-        self.tx.send(Event::Mutate(mutation, reply)).map_err(|_| "the kernel is stopping")?;
-        Ok(answer.recv().map_err(|_| "the kernel stopped before it answered")??)
+        self.tx
+            .send(Event::Mutate(mutation, reply))
+            .map_err(|_| "the kernel is stopping")?;
+        Ok(answer
+            .recv()
+            .map_err(|_| "the kernel stopped before it answered")??)
     }
 
     /// Be told whenever there are new records, or the kernels in reach changed.
@@ -146,7 +164,9 @@ impl Ctx {
     /// instead of being left out silently.
     fn known(&self) -> Res<Vec<String>> {
         let mut kernels = self.reachable();
-        let mut stmt = self.conn.prepare("SELECT name FROM kernels WHERE closed = 0 ORDER BY name")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT name FROM kernels WHERE closed = 0 ORDER BY name")?;
         for name in stmt.query_map([], |r| r.get::<_, String>(0))? {
             let name = name?;
             if name != self.me && !kernels.contains(&name) {
@@ -158,7 +178,14 @@ impl Ctx {
 
     /// The kernels that can be reached over links now.
     fn reachable(&self) -> Vec<String> {
-        self.shared.net.lock().unwrap().reachable.iter().map(|r| r.name.clone()).collect()
+        self.shared
+            .net
+            .lock()
+            .unwrap()
+            .reachable
+            .iter()
+            .map(|r| r.name.clone())
+            .collect()
     }
 }
 
@@ -167,7 +194,12 @@ impl Ctx {
 pub fn listen(cfg: Arc<Config>, tx: Sender<Event>, shared: Arc<Shared>) -> Res<()> {
     let path = cfg.run_dir.join(format!("{}.sock", cfg.name));
     if UnixStream::connect(&path).is_ok() {
-        return Err(format!("a kernel called `{}` is already running on this machine (its socket is {})", cfg.name, path.display()).into());
+        return Err(format!(
+            "a kernel called `{}` is already running on this machine (its socket is {})",
+            cfg.name,
+            path.display()
+        )
+        .into());
     }
     let _ = fs::remove_file(&path);
     let listener = UnixListener::bind(&path).map_err(|e| format!("could not make the socket {}: {e}. (A socket's path must be short; set $JARVIS_RUN to a short directory on this machine's own disk.)", path.display()))?;
@@ -181,13 +213,17 @@ pub fn listen(cfg: Arc<Config>, tx: Sender<Event>, shared: Arc<Shared>) -> Res<(
 }
 
 fn connection(stream: UnixStream, cfg: Arc<Config>, tx: Sender<Event>, shared: Arc<Shared>) {
-    let Ok(read_half) = stream.try_clone() else { return };
+    let Ok(read_half) = stream.try_clone() else {
+        return;
+    };
     let mut reader = BufReader::new(read_half);
     let mut first = String::new();
     if reader.read_line(&mut first).is_err() {
         return;
     }
-    let Ok(request) = serde_json::from_str::<Value>(&first) else { return };
+    let Ok(request) = serde_json::from_str::<Value>(&first) else {
+        return;
+    };
     // Not a command: another kernel, asking to be linked.
     if request["link"] == true {
         let id = shared.next_link.fetch_add(1, Ordering::SeqCst);
@@ -220,8 +256,22 @@ pub fn answer(cfg: Arc<Config>, tx: Sender<Event>, shared: Arc<Shared>, request:
 
 /// Carry out a command for a kernel that follows this one: each line goes
 /// back as it is printed, until the command ends or `alive` is switched off.
-pub fn publish(cfg: Arc<Config>, tx: Sender<Event>, shared: Arc<Shared>, request: Value, sid: String, to: String, alive: Arc<AtomicBool>) {
-    let mut out = ToFollower { tx: tx.clone(), sid: sid.clone(), to: to.clone(), alive, notes: Vec::new() };
+pub fn publish(
+    cfg: Arc<Config>,
+    tx: Sender<Event>,
+    shared: Arc<Shared>,
+    request: Value,
+    sid: String,
+    to: String,
+    alive: Arc<AtomicBool>,
+) {
+    let mut out = ToFollower {
+        tx: tx.clone(),
+        sid: sid.clone(),
+        to: to.clone(),
+        alive,
+        notes: Vec::new(),
+    };
     let code = match Ctx::of_kernel(cfg, tx.clone(), shared) {
         Ok(ctx) => handle(&ctx, &request, &mut out),
         Err(e) => {
@@ -229,7 +279,11 @@ pub fn publish(cfg: Arc<Config>, tx: Sender<Event>, shared: Arc<Shared>, request
             1
         }
     };
-    let _ = tx.send(Event::Publish { sid, to, item: json!({"end": code, "why": out.notes.join("; ")}) });
+    let _ = tx.send(Event::Publish {
+        sid,
+        to,
+        item: json!({"end": code, "why": out.notes.join("; ")}),
+    });
 }
 
 /// Carry out one command. The request is `{"argv": what was typed after
@@ -252,17 +306,30 @@ fn print(out: &mut dyn Out, answer: &Value) {
     }
     for note in answer["e"].as_array().into_iter().flatten() {
         let note = note.as_str().unwrap_or("");
-        out.note(&if note.starts_with("jarvis:") || note.starts_with("note:") { note.to_string() } else { format!("note: {note}") });
+        out.note(
+            &if note.starts_with("jarvis:") || note.starts_with("note:") {
+                note.to_string()
+            } else {
+                format!("note: {note}")
+            },
+        );
     }
 }
 
 fn words(list: &Value) -> Vec<String> {
-    list.as_array().map(|a| a.iter().filter_map(|w| w.as_str().map(str::to_string)).collect()).unwrap_or_default()
+    list.as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|w| w.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn run(ctx: &Ctx, request: &Value, out: &mut dyn Out) -> Res<i32> {
     let argv = words(&request["argv"]);
-    let cli = Cli::try_parse_from(std::iter::once("jarvis".to_string()).chain(argv.clone())).map_err(|e| e.to_string())?;
+    let cli = Cli::try_parse_from(std::iter::once("jarvis".to_string()).chain(argv.clone()))
+        .map_err(|e| e.to_string())?;
     let command = cli.command.ok_or("no command was given")?;
     // Who is asking: a process, or the person at this kernel.
     let by = match request["by"].as_str().unwrap_or("") {
@@ -375,12 +442,29 @@ fn run(ctx: &Ctx, request: &Value, out: &mut dyn Out) -> Res<i32> {
 /// Have another kernel carry out a command, and wait a while for what came
 /// of it. The request travels like a message: if that kernel cannot be
 /// reached now, it is carried out when it can.
-fn request_of(ctx: &Ctx, out: &mut dyn Out, kernel: &str, by: &str, argv: Vec<String>, extra: Value) -> Res<i32> {
+fn request_of(
+    ctx: &Ctx,
+    out: &mut dyn Out,
+    kernel: &str,
+    by: &str,
+    argv: Vec<String>,
+    extra: Value,
+) -> Res<i32> {
     let (outcome, came) = mpsc::channel();
-    let accepted = ctx.mutate(Mutation::Request { kernel: kernel.to_string(), by: by.to_string(), argv, extra, outcome })?;
+    let accepted = ctx.mutate(Mutation::Request {
+        kernel: kernel.to_string(),
+        by: by.to_string(),
+        argv,
+        extra,
+        outcome,
+    })?;
     let id = accepted["o"][0].as_str().unwrap_or("").to_string();
     // A kernel that cannot be reached will not answer soon: say so at once.
-    let patience = if accepted["reachable"] == true { REQUEST_PATIENCE } else { Duration::ZERO };
+    let patience = if accepted["reachable"] == true {
+        REQUEST_PATIENCE
+    } else {
+        Duration::ZERO
+    };
     match came.recv_timeout(patience) {
         Ok(result) => {
             print(out, &result);
@@ -405,7 +489,17 @@ fn request_of(ctx: &Ctx, out: &mut dyn Out, kernel: &str, by: &str, argv: Vec<St
 fn ask(ctx: &Ctx, kernel: &str, by: &str, argv: Vec<String>) -> Receiver<Result<Value, String>> {
     let (reply, answer) = mpsc::channel();
     let request = json!({"argv": argv, "by": by});
-    if ctx.tx.send(Event::Mutate(Mutation::Ask { on: kernel.to_string(), request }, reply.clone())).is_err() {
+    if ctx
+        .tx
+        .send(Event::Mutate(
+            Mutation::Ask {
+                on: kernel.to_string(),
+                request,
+            },
+            reply.clone(),
+        ))
+        .is_err()
+    {
         let _ = reply.send(Err("the kernel here is stopping".into()));
     }
     answer
@@ -426,7 +520,15 @@ fn relay(ctx: &Ctx, out: &mut dyn Out, kernel: &str, by: &str, argv: Vec<String>
 
 /// Do something to processes that may be on several kernels: on this kernel
 /// directly, on each other kernel by a request.
-fn each_kernel(ctx: &Ctx, out: &mut dyn Out, by: &str, command: &str, who: &[String], flags: &[&str], here: impl Fn(Vec<String>) -> Mutation) -> Res<i32> {
+fn each_kernel(
+    ctx: &Ctx,
+    out: &mut dyn Out,
+    by: &str,
+    command: &str,
+    who: &[String],
+    flags: &[&str],
+    here: impl Fn(Vec<String>) -> Mutation,
+) -> Res<i32> {
     let mut groups: Vec<(String, Vec<String>)> = Vec::new();
     for address in who {
         let (_, kernel) = index::address(address, "process")?;
@@ -441,7 +543,10 @@ fn each_kernel(ctx: &Ctx, out: &mut dyn Out, by: &str, command: &str, who: &[Str
             print(out, &ctx.mutate(here(addresses))?);
             0
         } else {
-            let argv: Vec<String> = std::iter::once(command.to_string()).chain(addresses).chain(flags.iter().map(|f| f.to_string())).collect();
+            let argv: Vec<String> = std::iter::once(command.to_string())
+                .chain(addresses)
+                .chain(flags.iter().map(|f| f.to_string()))
+                .collect();
             request_of(ctx, out, &kernel, by, argv, json!({}))?
         };
         worst = worst.max(code);
@@ -460,7 +565,10 @@ type Silent = Vec<(String, String)>;
 /// kernel, `@K` a kernel, `NAME@K` a process, `--all` every kernel in reach.
 fn scope(ctx: &Ctx, what: &[String], all: bool) -> Res<Scope> {
     if all {
-        return Ok(std::iter::once(ctx.me.clone()).chain(ctx.known()?).map(|k| (k, Vec::new())).collect());
+        return Ok(std::iter::once(ctx.me.clone())
+            .chain(ctx.known()?)
+            .map(|k| (k, Vec::new()))
+            .collect());
     }
     if what.is_empty() {
         return Ok(vec![(ctx.me.clone(), Vec::new())]);
@@ -474,7 +582,9 @@ fn scope(ctx: &Ctx, what: &[String], all: bool) -> Res<Scope> {
             }
             _ => {
                 let (_, kernel) = index::address(item, "process")?;
-                some.entry(kernel.to_string()).or_default().push(item.clone());
+                some.entry(kernel.to_string())
+                    .or_default()
+                    .push(item.clone());
             }
         }
     }
@@ -485,20 +595,35 @@ fn scope(ctx: &Ctx, what: &[String], all: bool) -> Res<Scope> {
 
 /// One part of a scope as it is typed: `@K`, or the processes.
 fn typed(kernel: &str, procs: &[String]) -> Vec<String> {
-    if procs.is_empty() { vec![format!("@{kernel}")] } else { procs.to_vec() }
+    if procs.is_empty() {
+        vec![format!("@{kernel}")]
+    } else {
+        procs.to_vec()
+    }
 }
 
 /// Rows from every kernel in the scope: this kernel's are worked out here by
 /// `here`, every other kernel is asked for `command ... --json`. Returns the
 /// rows, and for each kernel that gave none, why.
-fn gather(ctx: &Ctx, by: &str, scope: &Scope, command: &str, flags: &[String], here: impl Fn(&[String]) -> Res<Vec<Value>>) -> Res<(Vec<Value>, Silent)> {
+fn gather(
+    ctx: &Ctx,
+    by: &str,
+    scope: &Scope,
+    command: &str,
+    flags: &[String],
+    here: impl Fn(&[String]) -> Res<Vec<Value>>,
+) -> Res<(Vec<Value>, Silent)> {
     let mut rows = Vec::new();
     let mut asked = Vec::new();
     for (kernel, procs) in scope {
         if *kernel == ctx.me {
             rows.extend(here(procs)?);
         } else {
-            let argv: Vec<String> = std::iter::once(command.to_string()).chain(typed(kernel, procs)).chain(flags.iter().cloned()).chain(std::iter::once("--json".to_string())).collect();
+            let argv: Vec<String> = std::iter::once(command.to_string())
+                .chain(typed(kernel, procs))
+                .chain(flags.iter().cloned())
+                .chain(std::iter::once("--json".to_string()))
+                .collect();
             asked.push((kernel.clone(), ask(ctx, kernel, by, argv)));
         }
     }
@@ -528,7 +653,10 @@ fn gather(ctx: &Ctx, by: &str, scope: &Scope, command: &str, flags: &[String], h
 /// Name the kernels that gave no answer. Returns the command's exit code.
 fn report(out: &mut dyn Out, silent: &[(String, String)]) -> i32 {
     for (kernel, why) in silent {
-        out.note(&format!("jarvis: nothing from the kernel `{kernel}`: {}", why.trim_start_matches("jarvis: ")));
+        out.note(&format!(
+            "jarvis: nothing from the kernel `{kernel}`: {}",
+            why.trim_start_matches("jarvis: ")
+        ));
     }
     if silent.is_empty() { 0 } else { PARTLY }
 }
@@ -538,13 +666,27 @@ fn report(out: &mut dyn Out, silent: &[(String, String)]) -> i32 {
 /// A process of this kernel, from its address.
 fn local(ctx: &Ctx, who: &str) -> Res<Proc> {
     index::address(who, "process")?;
-    index::find_proc(&ctx.conn, who)?.ok_or_else(|| format!("there is no process `{who}` (`jarvis ps @{}` lists the processes of this kernel)", ctx.me).into())
+    index::find_proc(&ctx.conn, who)?.ok_or_else(|| {
+        format!(
+            "there is no process `{who}` (`jarvis ps @{}` lists the processes of this kernel)",
+            ctx.me
+        )
+        .into()
+    })
 }
 
 /// The first line of real text, shortened.
 fn clip(text: &str, limit: usize) -> String {
-    let line = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
-    if line.chars().count() > limit { format!("{}…", line.chars().take(limit).collect::<String>()) } else { line.to_string() }
+    let line = text
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim();
+    if line.chars().count() > limit {
+        format!("{}…", line.chars().take(limit).collect::<String>())
+    } else {
+        line.to_string()
+    }
 }
 
 /// `2m`, `40s`: how long ago a moment (in milliseconds) was.
@@ -563,14 +705,22 @@ fn clock(ms: i64) -> String {
     let seconds = (ms / 1000) as libc::time_t;
     let mut parts: libc::tm = unsafe { std::mem::zeroed() };
     unsafe { libc::localtime_r(&seconds, &mut parts) };
-    format!("{:02}:{:02}:{:02}", parts.tm_hour, parts.tm_min, parts.tm_sec)
+    format!(
+        "{:02}:{:02}:{:02}",
+        parts.tm_hour, parts.tm_min, parts.tm_sec
+    )
 }
 
 /// The first line of real text in a process's `.jarvis/ABOUT.md`: how it
 /// describes itself.
 fn about(ctx: &Ctx, p: &Proc) -> String {
-    let text = fs::read_to_string(ctx.cfg.proc_dir(&p.name).join(".jarvis/ABOUT.md")).unwrap_or_default();
-    text.lines().map(str::trim).find(|l| !l.is_empty() && !l.starts_with('#')).unwrap_or("").to_string()
+    let text =
+        fs::read_to_string(ctx.cfg.proc_dir(&p.name).join(".jarvis/ABOUT.md")).unwrap_or_default();
+    text.lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !l.starts_with('#'))
+        .unwrap_or("")
+        .to_string()
 }
 
 /// How far a message has got, in words; empty if it is dealt with.
@@ -592,23 +742,35 @@ fn progress(status: &str, attempts: i64) -> String {
 
 /// `NAME=VALUE` as a tag. An empty value means "remove this tag".
 pub fn parse_tag(text: &str) -> Res<(String, String)> {
-    let (key, value) = text.split_once('=').ok_or_else(|| format!("`{text}` is not a tag: write NAME=VALUE, such as project=moe"))?;
+    let (key, value) = text
+        .split_once('=')
+        .ok_or_else(|| format!("`{text}` is not a tag: write NAME=VALUE, such as project=moe"))?;
     let key = key.trim();
     let plain = |c: char| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.');
     if key.is_empty() || !key.chars().all(plain) {
-        return Err(format!("`{key}` cannot be the name of a tag: use letters, digits, spaces, `-`, `_` and `.`").into());
+        return Err(format!(
+            "`{key}` cannot be the name of a tag: use letters, digits, spaces, `-`, `_` and `.`"
+        )
+        .into());
     }
     if key == "kernel" {
-        return Err("`kernel` is not a tag to set: every process counts as tagged with the kernel it is on".into());
+        return Err(
+            "`kernel` is not a tag to set: every process counts as tagged with the kernel it is on"
+                .into(),
+        );
     }
     Ok((key.to_string(), value.trim().to_string()))
 }
 
 /// The tags of a process, as a JSON object. The kernel it is on is one of them.
 fn tags_of(conn: &Connection, p: &Proc) -> Res<Value> {
-    let mut stmt = conn.prepare_cached("SELECT key, value FROM tags WHERE addr = ?1 ORDER BY key")?;
-    let mut tags: serde_json::Map<String, Value> =
-        stmt.query_map([&p.addr], |r| Ok((r.get::<_, String>(0)?, Value::String(r.get(1)?))))?.collect::<Result<_, _>>()?;
+    let mut stmt =
+        conn.prepare_cached("SELECT key, value FROM tags WHERE addr = ?1 ORDER BY key")?;
+    let mut tags: serde_json::Map<String, Value> = stmt
+        .query_map([&p.addr], |r| {
+            Ok((r.get::<_, String>(0)?, Value::String(r.get(1)?)))
+        })?
+        .collect::<Result<_, _>>()?;
     tags.insert("kernel".into(), Value::String(p.kernel.clone()));
     Ok(Value::Object(tags))
 }
@@ -624,7 +786,9 @@ fn describe(ctx: &Ctx, p: &Proc) -> Res<Value> {
         .prepare_cached("SELECT COUNT(*), SUM(json_extract(data, '$.cost_usd')) FROM records WHERE proc = ?1 AND kind = 'turn'")?
         .query_row([&p.addr], |r| Ok((r.get(0)?, r.get(1)?)))?;
     let mail: i64 = conn
-        .prepare_cached("SELECT COUNT(*) FROM messages WHERE recipient = ?1 AND status IN ('pending', 'taken')")?
+        .prepare_cached(
+            "SELECT COUNT(*) FROM messages WHERE recipient = ?1 AND status IN ('pending', 'taken')",
+        )?
         .query_row([&p.addr], |r| r.get(0))?;
     // `failing`: its last turn failed, and its mail is waiting for the next
     // try; or it has no agent and its code failed on what it last got.
@@ -661,21 +825,30 @@ fn state_words(row: &Value) -> String {
 
 /// This kernel's processes: all of them, or only those named.
 fn ps_rows(ctx: &Ctx, only: &[String]) -> Res<Vec<Value>> {
-    index::procs(&ctx.conn)?.iter().filter(|p| only.is_empty() || only.contains(&p.addr)).map(|p| describe(ctx, p)).collect()
+    index::procs(&ctx.conn)?
+        .iter()
+        .filter(|p| only.is_empty() || only.contains(&p.addr))
+        .map(|p| describe(ctx, p))
+        .collect()
 }
 
 fn ps(ctx: &Ctx, by: &str, args: cli::Ps, out: &mut dyn Out) -> Res<i32> {
     // One process: everything about it, from its own kernel.
     if let [one] = args.what.as_slice()
-        && !one.starts_with('@') {
-            let (_, kernel) = index::address(one, "process")?;
-            if kernel != ctx.me {
-                let argv = ["ps", one.as_str()].iter().map(|w| w.to_string()).chain(args.json.then(|| "--json".to_string())).collect();
-                return relay(ctx, out, kernel, by, argv);
-            }
-            ps_one(ctx, &local(ctx, one)?, args.json, out)?;
-            return Ok(0);
+        && !one.starts_with('@')
+    {
+        let (_, kernel) = index::address(one, "process")?;
+        if kernel != ctx.me {
+            let argv = ["ps", one.as_str()]
+                .iter()
+                .map(|w| w.to_string())
+                .chain(args.json.then(|| "--json".to_string()))
+                .collect();
+            return relay(ctx, out, kernel, by, argv);
         }
+        ps_one(ctx, &local(ctx, one)?, args.json, out)?;
+        return Ok(0);
+    }
     let scope = scope(ctx, &args.what, args.all)?;
     let (rows, silent) = gather(ctx, by, &scope, "ps", &[], |only| ps_rows(ctx, only))?;
     if args.json {
@@ -688,10 +861,24 @@ fn ps(ctx: &Ctx, by: &str, args: cli::Ps, out: &mut dyn Out) -> Res<i32> {
             out.line("no processes there. `jarvis help spawn` shows how to create one.");
         }
     } else {
-        let wide = rows.iter().map(|r| r["id"].as_str().unwrap_or("").len()).max().unwrap_or(0).max(8);
-        out.line(&format!("{:<wide$}  {:<13} {:<20} ABOUT", "PROCESS", "STATE", "MADE BY"));
+        let wide = rows
+            .iter()
+            .map(|r| r["id"].as_str().unwrap_or("").len())
+            .max()
+            .unwrap_or(0)
+            .max(8);
+        out.line(&format!(
+            "{:<wide$}  {:<13} {:<20} ABOUT",
+            "PROCESS", "STATE", "MADE BY"
+        ));
         for r in &rows {
-            out.line(&format!("{:<wide$}  {:<13} {:<20} {}", r["id"].as_str().unwrap_or("-"), state_words(r), r["parent"].as_str().unwrap_or(""), r["about"].as_str().unwrap_or("")));
+            out.line(&format!(
+                "{:<wide$}  {:<13} {:<20} {}",
+                r["id"].as_str().unwrap_or("-"),
+                state_words(r),
+                r["parent"].as_str().unwrap_or(""),
+                r["about"].as_str().unwrap_or("")
+            ));
         }
     }
     Ok(report(out, &silent))
@@ -702,7 +889,11 @@ fn ps_one(ctx: &Ctx, p: &Proc, as_json: bool, out: &mut dyn Out) -> Res<()> {
     let conn = &ctx.conn;
     let mut row = describe(ctx, p)?;
     let service_pid: Option<u32> = conn
-        .query_row("SELECT pid, started FROM children WHERE proc = ?1 AND kind = 'run'", [&p.name], |r| Ok((r.get::<_, u32>(0)?, r.get::<_, String>(1)?)))
+        .query_row(
+            "SELECT pid, started FROM children WHERE proc = ?1 AND kind = 'run'",
+            [&p.name],
+            |r| Ok((r.get::<_, u32>(0)?, r.get::<_, String>(1)?)),
+        )
         .ok()
         .filter(|(pid, since)| children::is_running(*pid, since))
         .map(|(pid, _)| pid);
@@ -721,7 +912,9 @@ fn ps_one(ctx: &Ctx, p: &Proc, as_json: bool, out: &mut dyn Out) -> Res<()> {
     row["commit"] = json!(head);
     row["service_pid"] = json!(service_pid);
     row["last_turn"] = match &last_turn {
-        Some((at, kind, data)) => json!({"at": at, "kind": kind, "reply": data["reply"], "error": data["error"], "cost_usd": data["cost_usd"]}),
+        Some((at, kind, data)) => {
+            json!({"at": at, "kind": kind, "reply": data["reply"], "error": data["error"], "cost_usd": data["cost_usd"]})
+        }
         None => Value::Null,
     };
     if as_json {
@@ -735,42 +928,105 @@ fn ps_one(ctx: &Ctx, p: &Proc, as_json: bool, out: &mut dyn Out) -> Res<()> {
     let no_agent = p.harness == kernel::NO_AGENT;
     line("address", p.addr.clone());
     line("state", state_words(&row));
-    line("about", match row["about"].as_str() {
-        Some(text) if !text.is_empty() => text.to_string(),
-        _ => "(has not described itself yet)".into(),
-    });
-    line("made by", format!("{}, {} ago", p.parent, ago(p.created_at)));
+    line(
+        "about",
+        match row["about"].as_str() {
+            Some(text) if !text.is_empty() => text.to_string(),
+            _ => "(has not described itself yet)".into(),
+        },
+    );
+    line(
+        "made by",
+        format!("{}, {} ago", p.parent, ago(p.created_at)),
+    );
     if let Some(from) = &p.from {
         line("from", from.clone());
     }
-    line("agent", if no_agent { "none: its code deals with its messages".into() } else { format!("harness `{}`", p.harness) });
+    line(
+        "agent",
+        if no_agent {
+            "none: its code deals with its messages".into()
+        } else {
+            format!("harness `{}`", p.harness)
+        },
+    );
     if let Some(tags) = row["tags"].as_object() {
-        line("tags", tags.iter().map(|(k, v)| format!("{k}={}", v.as_str().unwrap_or(""))).collect::<Vec<_>>().join(", "));
+        line(
+            "tags",
+            tags.iter()
+                .map(|(k, v)| format!("{k}={}", v.as_str().unwrap_or("")))
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
     }
-    line("branch", format!("{}{}", p.branch, head.map(|h| format!(" (at {h})")).unwrap_or_default()));
-    line("directory", row["directory"].as_str().unwrap_or("").to_string());
-    line("service", match (row["has_run"].as_bool(), service_pid, &last_exit) {
-        (Some(true), Some(pid), _) => format!("running (pid {pid})"),
-        (Some(true), None, Some((at, _, data))) => format!("not running; it exited {} ago with {}", ago(*at), data["status"].as_str().unwrap_or("?")),
-        (Some(true), None, None) => "not running".into(),
-        _ => "none (no .jarvis/run)".into(),
-    });
-    line("handler", if row["has_handle"] == true { "yes (.jarvis/handle)".into() } else { "none".into() });
+    line(
+        "branch",
+        format!(
+            "{}{}",
+            p.branch,
+            head.map(|h| format!(" (at {h})")).unwrap_or_default()
+        ),
+    );
+    line(
+        "directory",
+        row["directory"].as_str().unwrap_or("").to_string(),
+    );
+    line(
+        "service",
+        match (row["has_run"].as_bool(), service_pid, &last_exit) {
+            (Some(true), Some(pid), _) => format!("running (pid {pid})"),
+            (Some(true), None, Some((at, _, data))) => format!(
+                "not running; it exited {} ago with {}",
+                ago(*at),
+                data["status"].as_str().unwrap_or("?")
+            ),
+            (Some(true), None, None) => "not running".into(),
+            _ => "none (no .jarvis/run)".into(),
+        },
+    );
+    line(
+        "handler",
+        if row["has_handle"] == true {
+            "yes (.jarvis/handle)".into()
+        } else {
+            "none".into()
+        },
+    );
     if !no_agent {
-        line("turns", match row["cost_usd"].as_f64() {
-            Some(cost) => format!("{}, costing ${cost:.2} in all", row["turns"]),
-            None => format!("{}", row["turns"]),
-        });
+        line(
+            "turns",
+            match row["cost_usd"].as_f64() {
+                Some(cost) => format!("{}, costing ${cost:.2} in all", row["turns"]),
+                None => format!("{}", row["turns"]),
+            },
+        );
     }
     line("mail", format!("{} waiting", row["mail_waiting"]));
     match last_turn {
         None if no_agent => {}
         None => line("last turn", "none yet".into()),
         Some((at, kind, data)) => match kind.as_str() {
-            "turn" => line("last turn", format!("{} ago: {}", ago(at), clip(data["reply"].as_str().unwrap_or(""), 200))),
-            "turn_interrupted" => line("last turn", format!("{} ago: interrupted (the process was stopped)", ago(at))),
+            "turn" => line(
+                "last turn",
+                format!(
+                    "{} ago: {}",
+                    ago(at),
+                    clip(data["reply"].as_str().unwrap_or(""), 200)
+                ),
+            ),
+            "turn_interrupted" => line(
+                "last turn",
+                format!("{} ago: interrupted (the process was stopped)", ago(at)),
+            ),
             _ => {
-                line("last turn", format!("{} ago: FAILED, {} in a row. The error:", ago(at), data["failures"]));
+                line(
+                    "last turn",
+                    format!(
+                        "{} ago: FAILED, {} in a row. The error:",
+                        ago(at),
+                        data["failures"]
+                    ),
+                );
                 for text in data["error"].as_str().unwrap_or("").lines() {
                     line("", text.to_string());
                 }
@@ -781,7 +1037,14 @@ fn ps_one(ctx: &Ctx, p: &Proc, as_json: bool, out: &mut dyn Out) -> Res<()> {
     if let Some((at, kind, data)) = last_of("'code_failed', 'handled_by_code'")
         && kind == "code_failed"
     {
-        line("its code", format!("{} ago: FAILED, {} in a row. The error:", ago(at), data["failures"]));
+        line(
+            "its code",
+            format!(
+                "{} ago: FAILED, {} in a row. The error:",
+                ago(at),
+                data["failures"]
+            ),
+        );
         for text in data["error"].as_str().unwrap_or("").lines() {
             line("", text.to_string());
         }
@@ -795,8 +1058,10 @@ fn kernels(ctx: &Ctx, as_json: bool, out: &mut dyn Out) -> Res<()> {
     let net = ctx.shared.net.lock().unwrap().clone();
     // A kernel is stopped by a signal to its process (TERM, or Ctrl-C where it runs).
     let pid = std::process::id();
-    let mut rows = vec![json!({"name": ctx.me, "state": format!("here (process {pid})"), "here": true, "reachable": true, "hops": 0, "via": Value::Null,
-                               "version": cli::VERSION, "closed": false, "last_reached_at": Value::Null, "pid": pid})];
+    let mut rows = vec![
+        json!({"name": ctx.me, "state": format!("here (process {pid})"), "here": true, "reachable": true, "hops": 0, "via": Value::Null,
+                               "version": cli::VERSION, "closed": false, "last_reached_at": Value::Null, "pid": pid}),
+    ];
     for reach in &net.reachable {
         let state = match reach.hops {
             1 => "linked".to_string(),
@@ -806,17 +1071,33 @@ fn kernels(ctx: &Ctx, as_json: bool, out: &mut dyn Out) -> Res<()> {
                          "version": reach.version, "closed": false, "last_reached_at": index::now_ms()}));
     }
     // Those that were reached before and cannot be now.
-    let mut stmt = ctx.conn.prepare("SELECT name, version, closed, closed_by, last_reached FROM kernels ORDER BY name")?;
+    let mut stmt = ctx.conn.prepare(
+        "SELECT name, version, closed, closed_by, last_reached FROM kernels ORDER BY name",
+    )?;
     let mut known = stmt.query([])?;
     while let Some(row) = known.next()? {
-        let (name, version, closed, closed_by, last_reached): (String, Option<String>, bool, Option<String>, i64) = (row.get(0)?, row.get(1)?, row.get::<_, i64>(2)? != 0, row.get(3)?, row.get(4)?);
+        let (name, version, closed, closed_by, last_reached): (
+            String,
+            Option<String>,
+            bool,
+            Option<String>,
+            i64,
+        ) = (
+            row.get(0)?,
+            row.get(1)?,
+            row.get::<_, i64>(2)? != 0,
+            row.get(3)?,
+            row.get(4)?,
+        );
         if name == ctx.me || net.reachable.iter().any(|r| r.name == name) {
             continue;
         }
         let state = match (closed, closed_by) {
             (true, Some(by)) => format!("taken to be gone (said {by})"),
             (true, None) => "taken to be gone".to_string(),
-            (false, _) if last_reached > 0 => format!("not reachable; last reached {} ago", ago(last_reached)),
+            (false, _) if last_reached > 0 => {
+                format!("not reachable; last reached {} ago", ago(last_reached))
+            }
             (false, _) => "not reachable".to_string(),
         };
         rows.push(json!({"name": name, "state": state, "here": false, "reachable": false, "hops": Value::Null, "via": Value::Null,
@@ -826,14 +1107,28 @@ fn kernels(ctx: &Ctx, as_json: bool, out: &mut dyn Out) -> Res<()> {
         out.line(&Value::Array(rows).to_string());
         return Ok(());
     }
-    let wide = rows.iter().map(|r| r["name"].as_str().unwrap_or("").len()).max().unwrap_or(0).max(6);
+    let wide = rows
+        .iter()
+        .map(|r| r["name"].as_str().unwrap_or("").len())
+        .max()
+        .unwrap_or(0)
+        .max(6);
     out.line(&format!("{:<wide$}  {:<24} STATE", "KERNEL", "JARVIS"));
     let mut differ = false;
     for r in &rows {
         // Kernels of different builds may not understand each other fully.
         let other = r["version"].as_str().is_some_and(|v| v != cli::VERSION);
         differ |= other && r["reachable"] == true;
-        out.line(&format!("{:<wide$}  {:<24} {}", r["name"].as_str().unwrap_or(""), format!("{}{}", r["version"].as_str().unwrap_or("-"), if other { " *" } else { "" }), r["state"].as_str().unwrap_or("")));
+        out.line(&format!(
+            "{:<wide$}  {:<24} {}",
+            r["name"].as_str().unwrap_or(""),
+            format!(
+                "{}{}",
+                r["version"].as_str().unwrap_or("-"),
+                if other { " *" } else { "" }
+            ),
+            r["state"].as_str().unwrap_or("")
+        ));
     }
     if differ {
         out.line("* another build of jarvis than this kernel's. Kernels that talk to each other should be the same build.");
@@ -872,7 +1167,11 @@ fn links(ctx: &Ctx, as_json: bool, out: &mut dyn Out) -> Res<()> {
         out.line("this kernel has no links. `jarvis help link` shows how to make one.");
     } else {
         for r in rows {
-            out.line(&format!("{}: {}", r["link"].as_str().unwrap_or(""), r["state"].as_str().unwrap_or("")));
+            out.line(&format!(
+                "{}: {}",
+                r["link"].as_str().unwrap_or(""),
+                r["state"].as_str().unwrap_or("")
+            ));
         }
     }
     Ok(())
@@ -896,7 +1195,13 @@ fn message_row(kernel: &str, r: &rusqlite::Row) -> rusqlite::Result<Value> {
 }
 
 fn message_json(ctx: &Ctx, id: &str) -> Option<Value> {
-    ctx.conn.prepare_cached(&format!("SELECT {MESSAGE_COLUMNS} FROM messages WHERE id = ?1")).ok()?.query_row([id], |r| message_row(&ctx.me, r)).ok()
+    ctx.conn
+        .prepare_cached(&format!(
+            "SELECT {MESSAGE_COLUMNS} FROM messages WHERE id = ?1"
+        ))
+        .ok()?
+        .query_row([id], |r| message_row(&ctx.me, r))
+        .ok()
 }
 
 /// How far along a status is, to choose between two kernels' word on one message.
@@ -925,7 +1230,14 @@ fn moment(ctx: &Ctx, when: &Option<String>) -> Res<Option<i64>> {
 
 /// This kernel's messages, newest last: all, or those to or from `who`.
 /// `after` and `before` are times.
-fn message_rows(ctx: &Ctx, who: Option<&str>, args: &cli::Messages, after: Option<i64>, before: Option<i64>, count: i64) -> Res<Vec<Value>> {
+fn message_rows(
+    ctx: &Ctx,
+    who: Option<&str>,
+    args: &cli::Messages,
+    after: Option<i64>,
+    before: Option<i64>,
+    count: i64,
+) -> Res<Vec<Value>> {
     let mut stmt = ctx.conn.prepare(&format!(
         "SELECT {MESSAGE_COLUMNS} FROM messages
          WHERE (?1 IS NULL OR at > ?1)
@@ -935,7 +1247,12 @@ fn message_rows(ctx: &Ctx, who: Option<&str>, args: &cli::Messages, after: Optio
            AND (?5 IS NULL OR sender = ?5 OR recipient = ?5)
          ORDER BY at DESC, id DESC LIMIT ?6"
     ))?;
-    let mut rows: Vec<Value> = stmt.query_map(params![after, before, args.waiting, who, args.with, count], |r| message_row(&ctx.me, r))?.collect::<Result<_, _>>()?;
+    let mut rows: Vec<Value> = stmt
+        .query_map(
+            params![after, before, args.waiting, who, args.with, count],
+            |r| message_row(&ctx.me, r),
+        )?
+        .collect::<Result<_, _>>()?;
     rows.reverse();
     Ok(rows)
 }
@@ -966,7 +1283,10 @@ fn one_scope(ctx: &Ctx, what: &Option<String>, all: bool) -> Res<(Scope, Option<
     match what {
         Some(item) if !item.starts_with('@') => {
             let (_, kernel) = index::address(item, "process")?;
-            Ok((vec![(kernel.to_string(), vec![item.clone()])], Some(item.clone())))
+            Ok((
+                vec![(kernel.to_string(), vec![item.clone()])],
+                Some(item.clone()),
+            ))
         }
         Some(item) => Ok((scope(ctx, std::slice::from_ref(item), false)?, None)),
         None => Ok((scope(ctx, &[], all)?, None)),
@@ -983,7 +1303,11 @@ fn messages(ctx: &Ctx, by: &str, args: cli::Messages, out: &mut dyn Out) -> Res<
     let mut flags: Vec<String> = vec!["-n".into(), count.to_string()];
     // Other kernels are given the moments as times: they need not have the message named.
     let (after, before) = (moment(ctx, &args.after)?, moment(ctx, &args.before)?);
-    for (flag, value) in [("--with", args.with.clone()), ("--after", after.map(|t| t.to_string())), ("--before", before.map(|t| t.to_string()))] {
+    for (flag, value) in [
+        ("--with", args.with.clone()),
+        ("--after", after.map(|t| t.to_string())),
+        ("--before", before.map(|t| t.to_string())),
+    ] {
         if let Some(value) = value {
             flags.extend([flag.to_string(), value]);
         }
@@ -993,12 +1317,20 @@ fn messages(ctx: &Ctx, by: &str, args: cli::Messages, out: &mut dyn Out) -> Res<
     }
     if args.pairs {
         flags.push("--pairs".into());
-        let (rows, silent) = gather(ctx, by, &scope, "messages", &flags, |_| pair_rows(ctx, who.as_deref()))?;
+        let (rows, silent) = gather(ctx, by, &scope, "messages", &flags, |_| {
+            pair_rows(ctx, who.as_deref())
+        })?;
         // Two kernels that both know a pair say the same of it: one row each.
         let mut pairs: BTreeMap<(String, String), Value> = BTreeMap::new();
         for row in rows {
-            let key = (row["a"].as_str().unwrap_or("").to_string(), row["b"].as_str().unwrap_or("").to_string());
-            if pairs.get(&key).is_none_or(|had| had["count"].as_i64() < row["count"].as_i64()) {
+            let key = (
+                row["a"].as_str().unwrap_or("").to_string(),
+                row["b"].as_str().unwrap_or("").to_string(),
+            );
+            if pairs
+                .get(&key)
+                .is_none_or(|had| had["count"].as_i64() < row["count"].as_i64())
+            {
                 pairs.insert(key, row);
             }
         }
@@ -1015,18 +1347,30 @@ fn messages(ctx: &Ctx, by: &str, args: cli::Messages, out: &mut dyn Out) -> Res<
                     0 => String::new(),
                     n => format!(", {n} not dealt with"),
                 };
-                out.line(&format!("{} and {}: {} message(s){waiting}", r["a"].as_str().unwrap_or(""), r["b"].as_str().unwrap_or(""), r["count"]));
+                out.line(&format!(
+                    "{} and {}: {} message(s){waiting}",
+                    r["a"].as_str().unwrap_or(""),
+                    r["b"].as_str().unwrap_or(""),
+                    r["count"]
+                ));
             }
         }
         return Ok(report(out, &silent));
     }
-    let (rows, silent) = gather(ctx, by, &scope, "messages", &flags, |_| message_rows(ctx, who.as_deref(), &args, after, before, count))?;
+    let (rows, silent) = gather(ctx, by, &scope, "messages", &flags, |_| {
+        message_rows(ctx, who.as_deref(), &args, after, before, count)
+    })?;
     // A message between two kernels is known to both: the word of the one
     // where it got furthest counts.
     let mut newest: BTreeMap<(i64, String), Value> = BTreeMap::new();
     for row in rows {
-        let key = (row["at"].as_i64().unwrap_or(0), row["id"].as_str().unwrap_or("").to_string());
-        if newest.get(&key).is_none_or(|had| rank(had["status"].as_str().unwrap_or("")) < rank(row["status"].as_str().unwrap_or(""))) {
+        let key = (
+            row["at"].as_i64().unwrap_or(0),
+            row["id"].as_str().unwrap_or("").to_string(),
+        );
+        if newest.get(&key).is_none_or(|had| {
+            rank(had["status"].as_str().unwrap_or("")) < rank(row["status"].as_str().unwrap_or(""))
+        }) {
             newest.insert(key, row);
         }
     }
@@ -1037,12 +1381,20 @@ fn messages(ctx: &Ctx, by: &str, args: cli::Messages, out: &mut dyn Out) -> Res<
         return Ok(report(out, &silent));
     }
     if rows.is_empty() && silent.is_empty() {
-        out.line(&format!("no messages{}", if args.waiting { " are waiting" } else { "" }));
+        out.line(&format!(
+            "no messages{}",
+            if args.waiting { " are waiting" } else { "" }
+        ));
     }
     for m in rows {
-        let state = progress(m["status"].as_str().unwrap_or(""), m["attempts"].as_i64().unwrap_or(0));
+        let state = progress(
+            m["status"].as_str().unwrap_or(""),
+            m["attempts"].as_i64().unwrap_or(0),
+        );
         let result = match m["result"].as_str() {
-            Some(result) if !result.trim().is_empty() => format!("\n⇒ {}", result.trim().replace('\n', "\n  ")),
+            Some(result) if !result.trim().is_empty() => {
+                format!("\n⇒ {}", result.trim().replace('\n', "\n  "))
+            }
             _ => String::new(),
         };
         out.line(&format!(
@@ -1051,7 +1403,11 @@ fn messages(ctx: &Ctx, by: &str, args: cli::Messages, out: &mut dyn Out) -> Res<
             clock(m["at"].as_i64().unwrap_or(0)),
             m["from"].as_str().unwrap_or(""),
             m["to"].as_str().unwrap_or(""),
-            if state.is_empty() { String::new() } else { format!("  ({state})") },
+            if state.is_empty() {
+                String::new()
+            } else {
+                format!("  ({state})")
+            },
             m["body"].as_str().unwrap_or(""),
         ));
     }
@@ -1069,13 +1425,24 @@ fn show(ctx: &Ctx, by: &str, args: cli::Show, argv: Vec<String>, out: &mut dyn O
         if kernel != ctx.me {
             return relay(ctx, out, kernel, by, argv);
         }
-        return Err(format!("there is no branch `{}` in {} (`jarvis ps @{}` lists the processes of this kernel)", args.who, repo.root.display(), ctx.me).into());
+        return Err(format!(
+            "there is no branch `{}` in {} (`jarvis ps @{}` lists the processes of this kernel)",
+            args.who,
+            repo.root.display(),
+            ctx.me
+        )
+        .into());
     }
     let text = match &args.path {
         None => repo.git(&["ls-tree", "-r", "--name-only", &args.who])?,
         Some(path) => repo
             .git(&["show", &format!("{}:{path}", args.who)])
-            .map_err(|_| format!("{} has no file `{path}` (`jarvis show {}` lists its files)", args.who, args.who))?,
+            .map_err(|_| {
+                format!(
+                    "{} has no file `{path}` (`jarvis show {}` lists its files)",
+                    args.who, args.who
+                )
+            })?,
     };
     out.line(&text);
     Ok(0)
@@ -1094,7 +1461,8 @@ fn fact_row(r: &rusqlite::Row) -> rusqlite::Result<Value> {
 
 const FACT_COLUMNS: &str = "seq, at, proc, kind, data, k, n";
 /// Records are about a process when it did them, or when they bring it a message.
-const ABOUT_PROC: &str = "(?2 IS NULL OR proc = ?2 OR (kind IN ('send', 'arrive') AND json_extract(data, '$.to') = ?2))";
+const ABOUT_PROC: &str =
+    "(?2 IS NULL OR proc = ?2 OR (kind IN ('send', 'arrive') AND json_extract(data, '$.to') = ?2))";
 /// A step is something an agent did inside a turn. There are many, so they
 /// are shown only when asked for.
 const STEPS: &str = "(?3 OR kind != 'step')";
@@ -1103,7 +1471,12 @@ const STEPS: &str = "(?3 OR kind != 'step')";
 /// between two places in its order, if given), oldest first.
 fn fact_rows(ctx: &Ctx, who: Option<&str>, args: &cli::Log, count: i64) -> Res<Vec<Value>> {
     let mut stmt = ctx.conn.prepare(&format!("SELECT {FACT_COLUMNS} FROM records WHERE seq > ?1 AND {ABOUT_PROC} AND {STEPS} AND (?5 IS NULL OR seq < ?5) ORDER BY seq DESC LIMIT ?4"))?;
-    let mut rows: Vec<Value> = stmt.query_map(params![args.after.unwrap_or(0), who, args.steps, count, args.before], fact_row)?.collect::<Result<_, _>>()?;
+    let mut rows: Vec<Value> = stmt
+        .query_map(
+            params![args.after.unwrap_or(0), who, args.steps, count, args.before],
+            fact_row,
+        )?
+        .collect::<Result<_, _>>()?;
     rows.reverse();
     Ok(rows)
 }
@@ -1114,29 +1487,90 @@ fn fact_text(fact: &Value) -> String {
     let text = |key: &str| d[key].as_str().unwrap_or("").to_string();
     let kind = fact["kind"].as_str().unwrap_or("");
     let what = match kind {
-        "send" if d["request"].is_object() => format!("asks {}: jarvis {}", kernel_of(&text("to")), clip(&text("body"), 140)),
+        "send" if d["request"].is_object() => format!(
+            "asks {}: jarvis {}",
+            kernel_of(&text("to")),
+            clip(&text("body"), 140)
+        ),
         "send" => format!("→ {}: {}", text("to"), clip(&text("body"), 140)),
-        "arrive" if d["request"].is_object() => format!("is asked by {} (through {}): jarvis {}", text("from"), text("via"), clip(&text("body"), 120)),
-        "arrive" => format!("← {} (through {}): {}", text("from"), text("via"), clip(&text("body"), 120)),
-        "forward" => format!("the message {} was passed on to {}", text("message"), text("next")),
-        "undeliverable" => format!("the message {} could not be delivered: {}", text("message"), text("why")),
+        "arrive" if d["request"].is_object() => format!(
+            "is asked by {} (through {}): jarvis {}",
+            text("from"),
+            text("via"),
+            clip(&text("body"), 120)
+        ),
+        "arrive" => format!(
+            "← {} (through {}): {}",
+            text("from"),
+            text("via"),
+            clip(&text("body"), 120)
+        ),
+        "forward" => format!(
+            "the message {} was passed on to {}",
+            text("message"),
+            text("next")
+        ),
+        "undeliverable" => format!(
+            "the message {} could not be delivered: {}",
+            text("message"),
+            text("why")
+        ),
         "receipt" => match (text("status").as_str(), d["result"].as_str()) {
             ("pending", _) => format!("its message {} arrived", text("message")),
-            ("handled", Some(result)) if !result.is_empty() => format!("its request {} was carried out: {}", text("message"), clip(result, 120)),
+            ("handled", Some(result)) if !result.is_empty() => format!(
+                "its request {} was carried out: {}",
+                text("message"),
+                clip(result, 120)
+            ),
             ("handled", _) => format!("its message {} was dealt with", text("message")),
-            ("failed", result) => format!("its request {} could not be carried out: {}", text("message"), clip(result.unwrap_or(""), 120)),
-            ("dropped", _) => format!("its message {} was dropped: its recipient was removed", text("message")),
-            (_, result) => format!("its message {} could not be delivered: {}", text("message"), clip(result.unwrap_or(""), 120)),
+            ("failed", result) => format!(
+                "its request {} could not be carried out: {}",
+                text("message"),
+                clip(result.unwrap_or(""), 120)
+            ),
+            ("dropped", _) => format!(
+                "its message {} was dropped: its recipient was removed",
+                text("message")
+            ),
+            (_, result) => format!(
+                "its message {} could not be delivered: {}",
+                text("message"),
+                clip(result.unwrap_or(""), 120)
+            ),
         },
-        "request_done" if d["code"] == 0 => format!("carried out the request {}: {}", text("message"), clip(&text("result"), 120)),
-        "request_done" => format!("could not carry out the request {}: {}", text("message"), clip(&text("result"), 120)),
+        "request_done" if d["code"] == 0 => format!(
+            "carried out the request {}: {}",
+            text("message"),
+            clip(&text("result"), 120)
+        ),
+        "request_done" => format!(
+            "could not carry out the request {}: {}",
+            text("message"),
+            clip(&text("result"), 120)
+        ),
         "turn" => {
-            let cost = d["cost_usd"].as_f64().map(|c| format!(" (${c:.3})")).unwrap_or_default();
+            let cost = d["cost_usd"]
+                .as_f64()
+                .map(|c| format!(" (${c:.3})"))
+                .unwrap_or_default();
             format!("turn{cost}: {}", clip(&text("reply"), 140))
         }
-        "turn_start" => format!("turn started on {} message(s)", d["messages"].as_array().map_or(0, Vec::len)),
-        "turn_failed" => format!("TURN FAILED ({} in a row, next try in {}s): {}", d["failures"], d["retry_in_s"], clip(&text("error"), 200)),
-        "code_failed" => format!("ITS CODE FAILED ({} in a row) on {} message(s): {}", d["failures"], d["messages"].as_array().map_or(0, Vec::len), clip(&text("error"), 200)),
+        "turn_start" => format!(
+            "turn started on {} message(s)",
+            d["messages"].as_array().map_or(0, Vec::len)
+        ),
+        "turn_failed" => format!(
+            "TURN FAILED ({} in a row, next try in {}s): {}",
+            d["failures"],
+            d["retry_in_s"],
+            clip(&text("error"), 200)
+        ),
+        "code_failed" => format!(
+            "ITS CODE FAILED ({} in a row) on {} message(s): {}",
+            d["failures"],
+            d["messages"].as_array().map_or(0, Vec::len),
+            clip(&text("error"), 200)
+        ),
         "turn_interrupted" => "turn interrupted; its mail waits".to_string(),
         "turn_end" => "turn ended".to_string(),
         "spawn" if d["continued"] == true => format!("carried on here by {}", text("parent")),
@@ -1144,28 +1578,62 @@ fn fact_text(fact: &Value) -> String {
         "stop" => format!("stopped by {}", text("by")),
         "start" => format!("started by {}", text("by")),
         "tag" => {
-            let set = d["set"].as_object().map(|set| set.iter().map(|(k, v)| format!("{k}={}", v.as_str().unwrap_or(""))).collect::<Vec<_>>().join(", "));
+            let set = d["set"].as_object().map(|set| {
+                set.iter()
+                    .map(|(k, v)| format!("{k}={}", v.as_str().unwrap_or("")))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            });
             format!("tagged by {}: {}", text("by"), set.unwrap_or_default())
         }
         "remove" => {
-            let cost = d["cost_usd"].as_f64().map(|c| format!(", had cost ${c:.3}")).unwrap_or_default();
-            format!("removed by {} (was at {}{cost})", text("by"), text("commit"))
+            let cost = d["cost_usd"]
+                .as_f64()
+                .map(|c| format!(", had cost ${c:.3}"))
+                .unwrap_or_default();
+            format!(
+                "removed by {} (was at {}{cost})",
+                text("by"),
+                text("commit")
+            )
         }
-        "commit" => format!("commit {} {}", text("commit").chars().take(8).collect::<String>(), text("subject")),
+        "commit" => format!(
+            "commit {} {}",
+            text("commit").chars().take(8).collect::<String>(),
+            text("subject")
+        ),
         "commit_skipped" => format!("nothing committed: {}", text("why")),
         "commit_failed" => format!("COULD NOT COMMIT: {}", clip(&text("error"), 200)),
-        "handled_by_code" => format!("its handler dealt with {} message(s)", d["messages"].as_array().map_or(0, Vec::len)),
+        "handled_by_code" => format!(
+            "its handler dealt with {} message(s)",
+            d["messages"].as_array().map_or(0, Vec::len)
+        ),
         "run_start" => "service started (.jarvis/run)".to_string(),
         "run_exit" => format!("service exited (.jarvis/run): {}", text("status")),
         "kernel_error" => format!("PROBLEM: {}", clip(&text("error"), 300)),
         "kernel" => "a new kernel".to_string(),
         "up" => format!("is up (jarvis {})", text("version")),
-        "restored" => format!("STARTED FROM WHAT WAS LAST SAVED ({}): it did not stop cleanly, and what it did after that save is lost", text("from")),
+        "restored" => format!(
+            "STARTED FROM WHAT WAS LAST SAVED ({}): it did not stop cleanly, and what it did after that save is lost",
+            text("from")
+        ),
         "closed" if text("kernel").is_empty() => "stopped".to_string(),
-        "closed" => format!("{} is taken to be gone (said {})", text("kernel"), text("by")),
+        "closed" => format!(
+            "{} is taken to be gone (said {})",
+            text("kernel"),
+            text("by")
+        ),
         "link_up" => format!("linked to {}", text("kernel")),
-        "link_down" => format!("the link to {} went down: {}", text("kernel"), clip(&text("why"), 200)),
-        "link_failing" => format!("the link {} cannot be made: {}", text("link"), clip(&text("why"), 300)),
+        "link_down" => format!(
+            "the link to {} went down: {}",
+            text("kernel"),
+            clip(&text("why"), 200)
+        ),
+        "link_failing" => format!(
+            "the link {} cannot be made: {}",
+            text("link"),
+            clip(&text("why"), 300)
+        ),
         "link_refused" => format!("a link was refused: {}", clip(&text("why"), 200)),
         "step" => format!("  · {:<8} {}", text("step"), clip(&text("text"), 160)),
         other if *d == json!({}) => other.to_string(),
@@ -1173,16 +1641,27 @@ fn fact_text(fact: &Value) -> String {
     };
     let proc = fact["proc"].as_str().unwrap_or("");
     // Who it is about; for what a kernel says of itself, that kernel.
-    let about = if name_of(proc) == KERNEL { format!("[{}]", fact["kernel"].as_str().unwrap_or("")) } else { proc.to_string() };
-    format!("{} {about:<24} {what}", clock(fact["at"].as_i64().unwrap_or(0)))
+    let about = if name_of(proc) == KERNEL {
+        format!("[{}]", fact["kernel"].as_str().unwrap_or(""))
+    } else {
+        proc.to_string()
+    };
+    format!(
+        "{} {about:<24} {what}",
+        clock(fact["at"].as_i64().unwrap_or(0))
+    )
 }
 
 /// This kernel's records after `last` (steps left out), as lines for a
 /// terminal. `last` is moved to the newest one. The kernel prints these as
 /// it runs.
 pub fn fact_lines(conn: &Connection, last: &mut i64) -> Res<Vec<String>> {
-    let mut stmt = conn.prepare_cached(&format!("SELECT {FACT_COLUMNS} FROM records WHERE seq > ?1 AND kind != 'step' ORDER BY seq"))?;
-    let facts: Vec<Value> = stmt.query_map([*last], fact_row)?.collect::<Result<_, _>>()?;
+    let mut stmt = conn.prepare_cached(&format!(
+        "SELECT {FACT_COLUMNS} FROM records WHERE seq > ?1 AND kind != 'step' ORDER BY seq"
+    ))?;
+    let facts: Vec<Value> = stmt
+        .query_map([*last], fact_row)?
+        .collect::<Result<_, _>>()?;
     Ok(facts
         .iter()
         .map(|fact| {
@@ -1204,8 +1683,16 @@ fn log(ctx: &Ctx, by: &str, args: cli::Log, out: &mut dyn Out) -> Res<i32> {
             flags.extend([flag.to_string(), value.to_string()]);
         }
     }
-    let (mut rows, silent) = gather(ctx, by, &scope, "log", &flags, |_| fact_rows(ctx, who.as_deref(), &args, count))?;
-    rows.sort_by_key(|r| (r["at"].as_i64(), r["kernel"].as_str().map(str::to_string), r["id"].as_i64()));
+    let (mut rows, silent) = gather(ctx, by, &scope, "log", &flags, |_| {
+        fact_rows(ctx, who.as_deref(), &args, count)
+    })?;
+    rows.sort_by_key(|r| {
+        (
+            r["at"].as_i64(),
+            r["kernel"].as_str().map(str::to_string),
+            r["id"].as_i64(),
+        )
+    });
     let rows = &rows[rows.len().saturating_sub(count.max(0) as usize)..];
     if args.json {
         out.line(&Value::Array(rows.to_vec()).to_string());
@@ -1232,14 +1719,25 @@ fn log(ctx: &Ctx, by: &str, args: cli::Log, out: &mut dyn Out) -> Res<i32> {
             *newest = (*newest).max(id);
         }
     }
-    follow(ctx, by, Followed { scope, all: args.all, after, steps: args.steps }, out, &|line: &Value, out: &mut dyn Out| match line["kind"].as_str() {
-        Some("fact") => out.line(&fact_text(&line["fact"])),
-        Some("lost") => {
-            out.note(&format!("jarvis: the kernel `{}` is no longer followed: {}. It is followed again when it can be reached", line["kernel"].as_str().unwrap_or(""), line["why"].as_str().unwrap_or("")));
-            true
-        }
-        _ => true,
-    })
+    follow(
+        ctx,
+        by,
+        Followed {
+            scope,
+            all: args.all,
+            after,
+            steps: args.steps,
+        },
+        out,
+        &|line: &Value, out: &mut dyn Out| match line["kind"].as_str() {
+            Some("fact") => out.line(&fact_text(&line["fact"])),
+            Some("lost") => {
+                out.note(&format!("jarvis: the kernel `{}` is no longer followed: {}. It is followed again when it can be reached", line["kernel"].as_str().unwrap_or(""), line["why"].as_str().unwrap_or("")));
+                true
+            }
+            _ => true,
+        },
+    )
 }
 
 // ------------------------------------------------------------------ watch
@@ -1255,11 +1753,24 @@ fn watch(ctx: &Ctx, by: &str, args: cli::Watch, out: &mut dyn Out) -> Res<i32> {
     let scope = scope(ctx, &args.what, args.all)?;
     // Only this kernel: no going through other threads.
     if let [(kernel, only)] = scope.as_slice()
-        && *kernel == ctx.me && !args.all {
-            watch_here(ctx, only, after.get(&ctx.me).copied(), args.steps, out)?;
-            return Ok(0);
-        }
-    follow(ctx, by, Followed { scope, all: args.all, after, steps: args.steps }, out, &|line: &Value, out: &mut dyn Out| out.line(&line.to_string()))
+        && *kernel == ctx.me
+        && !args.all
+    {
+        watch_here(ctx, only, after.get(&ctx.me).copied(), args.steps, out)?;
+        return Ok(0);
+    }
+    follow(
+        ctx,
+        by,
+        Followed {
+            scope,
+            all: args.all,
+            after,
+            steps: args.steps,
+        },
+        out,
+        &|line: &Value, out: &mut dyn Out| out.line(&line.to_string()),
+    )
 }
 
 /// What to follow: which kernels and processes, whether also kernels that
@@ -1289,7 +1800,9 @@ struct ToFeed {
 
 impl Out for ToFeed {
     fn line(&mut self, text: &str) -> bool {
-        let Ok(line) = serde_json::from_str::<Value>(text) else { return true };
+        let Ok(line) = serde_json::from_str::<Value>(text) else {
+            return true;
+        };
         self.tx.send(Fed::Line(self.kernel.clone(), line)).is_ok()
     }
     fn note(&mut self, _text: &str) {}
@@ -1300,8 +1813,19 @@ impl Out for ToFeed {
 /// followed again, from where it stopped, when it can be reached; with
 /// `all`, kernels that come into reach are followed too. Each line is given
 /// to `show`, which says whether anyone is still reading.
-fn follow(ctx: &Ctx, by: &str, what: Followed, out: &mut dyn Out, show: &dyn Fn(&Value, &mut dyn Out) -> bool) -> Res<i32> {
-    let Followed { scope, all, mut after, steps } = what;
+fn follow(
+    ctx: &Ctx,
+    by: &str,
+    what: Followed,
+    out: &mut dyn Out,
+    show: &dyn Fn(&Value, &mut dyn Out) -> bool,
+) -> Res<i32> {
+    let Followed {
+        scope,
+        all,
+        mut after,
+        steps,
+    } = what;
     let (tx, fed) = mpsc::channel::<Fed>();
     let news = ctx.follow();
     let wake = tx.clone();
@@ -1328,14 +1852,25 @@ fn follow(ctx: &Ctx, by: &str, what: Followed, out: &mut dyn Out, show: &dyn Fn(
             if live.contains(kernel) || (*kernel != ctx.me && !reachable.contains(kernel)) {
                 continue;
             }
-            let mut argv: Vec<String> = std::iter::once("watch".to_string()).chain(typed(kernel, only)).collect();
+            let mut argv: Vec<String> = std::iter::once("watch".to_string())
+                .chain(typed(kernel, only))
+                .collect();
             if let Some(n) = after.get(kernel) {
                 argv.extend(["--after".to_string(), format!("{kernel}:{n}")]);
             }
             if steps {
                 argv.push("--steps".into());
             }
-            match feed(ctx, by, kernel, argv, only.clone(), after.get(kernel).copied(), steps, tx.clone()) {
+            match feed(
+                ctx,
+                by,
+                kernel,
+                argv,
+                only.clone(),
+                after.get(kernel).copied(),
+                steps,
+                tx.clone(),
+            ) {
                 Ok(()) => {
                     live.insert(kernel.clone());
                     said_lost.remove(kernel);
@@ -1347,7 +1882,13 @@ fn follow(ctx: &Ctx, by: &str, what: Followed, out: &mut dyn Out, show: &dyn Fn(
         }
         // Kernels that were named and cannot be reached are said to be lost, once.
         for kernel in parts.keys() {
-            if !live.contains(kernel) && said_lost.insert(kernel.clone()) && !show(&json!({"kind": "lost", "kernel": kernel, "why": "it cannot be reached right now"}), out) {
+            if !live.contains(kernel)
+                && said_lost.insert(kernel.clone())
+                && !show(
+                    &json!({"kind": "lost", "kernel": kernel, "why": "it cannot be reached right now"}),
+                    out,
+                )
+            {
                 return Ok(0);
             }
         }
@@ -1365,7 +1906,9 @@ fn follow(ctx: &Ctx, by: &str, what: Followed, out: &mut dyn Out, show: &dyn Fn(
             }
             Ok(Fed::Lost(kernel, why)) => {
                 live.remove(&kernel);
-                if said_lost.insert(kernel.clone()) && !show(&json!({"kind": "lost", "kernel": kernel, "why": why}), out) {
+                if said_lost.insert(kernel.clone())
+                    && !show(&json!({"kind": "lost", "kernel": kernel, "why": why}), out)
+                {
                     return Ok(0);
                 }
             }
@@ -1378,12 +1921,24 @@ fn follow(ctx: &Ctx, by: &str, what: Followed, out: &mut dyn Out, show: &dyn Fn(
 /// Start following one kernel: this one on a thread here, another one by
 /// having it run the command and send its lines back.
 #[allow(clippy::too_many_arguments)]
-fn feed(ctx: &Ctx, by: &str, kernel: &str, argv: Vec<String>, only: Vec<String>, after: Option<i64>, steps: bool, tx: Sender<Fed>) -> Res<()> {
+fn feed(
+    ctx: &Ctx,
+    by: &str,
+    kernel: &str,
+    argv: Vec<String>,
+    only: Vec<String>,
+    after: Option<i64>,
+    steps: bool,
+    tx: Sender<Fed>,
+) -> Res<()> {
     let kernel = kernel.to_string();
     if kernel == ctx.me {
         let here = ctx.again()?;
         thread::spawn(move || {
-            let mut out = ToFeed { kernel: kernel.clone(), tx: tx.clone() };
+            let mut out = ToFeed {
+                kernel: kernel.clone(),
+                tx: tx.clone(),
+            };
             let why = match watch_here(&here, &only, after, steps, &mut out) {
                 Ok(()) => "it ended".to_string(),
                 Err(e) => e.to_string(),
@@ -1393,7 +1948,11 @@ fn feed(ctx: &Ctx, by: &str, kernel: &str, argv: Vec<String>, only: Vec<String>,
         return Ok(());
     }
     let (to, from) = mpsc::channel::<Value>();
-    let answer = ctx.mutate(Mutation::Subscribe { on: kernel.clone(), request: json!({"argv": argv, "by": by}), to })?;
+    let answer = ctx.mutate(Mutation::Subscribe {
+        on: kernel.clone(),
+        request: json!({"argv": argv, "by": by}),
+        to,
+    })?;
     let sid = answer["o"][0].as_str().unwrap_or("").to_string();
     let to_kernel = ctx.tx.clone();
     thread::spawn(move || {
@@ -1407,7 +1966,12 @@ fn feed(ctx: &Ctx, by: &str, kernel: &str, argv: Vec<String>, only: Vec<String>,
                 };
                 break;
             }
-            let Some(line) = item["line"].as_str().and_then(|text| serde_json::from_str::<Value>(text).ok()) else { continue };
+            let Some(line) = item["line"]
+                .as_str()
+                .and_then(|text| serde_json::from_str::<Value>(text).ok())
+            else {
+                continue;
+            };
             if tx.send(Fed::Line(kernel.clone(), line)).is_err() {
                 // Nobody follows any more: that kernel can stop sending.
                 let (reply, _) = mpsc::channel();
@@ -1422,12 +1986,20 @@ fn feed(ctx: &Ctx, by: &str, kernel: &str, argv: Vec<String>, only: Vec<String>,
 
 /// Print every change on this kernel as a JSON line, for as long as someone
 /// is reading: all of it, or only what is about the processes in `only`.
-fn watch_here(ctx: &Ctx, only: &[String], after: Option<i64>, steps: bool, out: &mut dyn Out) -> Res<()> {
+fn watch_here(
+    ctx: &Ctx,
+    only: &[String],
+    after: Option<i64>,
+    steps: bool,
+    out: &mut dyn Out,
+) -> Res<()> {
     let conn = &ctx.conn;
     let news = ctx.follow();
     let mut cursor: i64 = match after {
         Some(after) => after,
-        None => conn.query_row("SELECT COALESCE(MAX(seq), 0) FROM records", [], |r| r.get(0))?,
+        None => conn.query_row("SELECT COALESCE(MAX(seq), 0) FROM records", [], |r| {
+            r.get(0)
+        })?,
     };
     let wanted = |addr: &str| only.is_empty() || only.iter().any(|one| one == addr);
     let line = |mut value: Value| -> String {
@@ -1450,14 +2022,20 @@ fn watch_here(ctx: &Ctx, only: &[String], after: Option<i64>, steps: bool, out: 
         let mut more = !first;
         while more {
             let mut stmt = conn.prepare_cached(&format!("SELECT {FACT_COLUMNS} FROM records WHERE seq > ?1 AND (?2 OR kind != 'step') ORDER BY seq LIMIT 2000"))?;
-            let facts: Vec<Value> = stmt.query_map(params![cursor, steps], fact_row)?.collect::<Result<_, _>>()?;
+            let facts: Vec<Value> = stmt
+                .query_map(params![cursor, steps], fact_row)?
+                .collect::<Result<_, _>>()?;
             more = facts.len() == 2000;
             for fact in facts {
                 cursor = fact["id"].as_i64().unwrap_or(cursor);
                 let kind = fact["kind"].as_str().unwrap_or("").to_string();
                 let proc = fact["proc"].as_str().unwrap_or("").to_string();
                 let brings = kind == "send" || kind == "arrive";
-                let to = if brings { fact["data"]["to"].as_str().unwrap_or("").to_string() } else { String::new() };
+                let to = if brings {
+                    fact["data"]["to"].as_str().unwrap_or("").to_string()
+                } else {
+                    String::new()
+                };
                 if brings {
                     touched.insert(to.clone());
                 }
@@ -1469,7 +2047,10 @@ fn watch_here(ctx: &Ctx, only: &[String], after: Option<i64>, steps: bool, out: 
                 }
                 let mut value = json!({"kind": "fact", "fact": fact});
                 if brings {
-                    value["message"] = value["fact"]["data"]["id"].as_str().and_then(|id| message_json(ctx, id)).unwrap_or(Value::Null);
+                    value["message"] = value["fact"]["data"]["id"]
+                        .as_str()
+                        .and_then(|id| message_json(ctx, id))
+                        .unwrap_or(Value::Null);
                 }
                 if !out.line(&line(value)) {
                     return Ok(());
@@ -1478,16 +2059,30 @@ fn watch_here(ctx: &Ctx, only: &[String], after: Option<i64>, steps: bool, out: 
         }
 
         // Messages whose status changed.
-        let mut stmt = conn.prepare_cached(&format!("SELECT id, status, attempts FROM messages WHERE {OPEN}"))?;
-        let waiting: HashMap<String, (String, i64)> = stmt.query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))))?.collect::<Result<_, _>>()?;
-        let mut changed: Vec<String> = waiting.iter().filter(|(id, state)| open.get(*id) != Some(*state)).map(|(id, _)| id.clone()).collect();
+        let mut stmt = conn.prepare_cached(&format!(
+            "SELECT id, status, attempts FROM messages WHERE {OPEN}"
+        ))?;
+        let waiting: HashMap<String, (String, i64)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))))?
+            .collect::<Result<_, _>>()?;
+        let mut changed: Vec<String> = waiting
+            .iter()
+            .filter(|(id, state)| open.get(*id) != Some(*state))
+            .map(|(id, _)| id.clone())
+            .collect();
         changed.extend(open.keys().filter(|id| !waiting.contains_key(*id)).cloned());
         open = waiting;
         if !first {
-            let mut changed: Vec<Value> = changed.iter().filter_map(|id| message_json(ctx, id)).collect();
+            let mut changed: Vec<Value> = changed
+                .iter()
+                .filter_map(|id| message_json(ctx, id))
+                .collect();
             changed.sort_by_key(|m| m["at"].as_i64());
             for message in changed {
-                let (from, to) = (message["from"].as_str().unwrap_or("").to_string(), message["to"].as_str().unwrap_or("").to_string());
+                let (from, to) = (
+                    message["from"].as_str().unwrap_or("").to_string(),
+                    message["to"].as_str().unwrap_or("").to_string(),
+                );
                 touched.insert(from.clone());
                 touched.insert(to.clone());
                 if !wanted(&from) && !wanted(&to) {
@@ -1500,7 +2095,10 @@ fn watch_here(ctx: &Ctx, only: &[String], after: Option<i64>, steps: bool, out: 
         }
 
         // Processes: at first all of them, then those something happened to.
-        let procs: Vec<Proc> = index::procs(conn)?.into_iter().filter(|p| wanted(&p.addr)).collect();
+        let procs: Vec<Proc> = index::procs(conn)?
+            .into_iter()
+            .filter(|p| wanted(&p.addr))
+            .collect();
         for p in &procs {
             if !first && !touched.contains(&p.addr) && said.contains_key(&p.addr) {
                 continue;
@@ -1515,7 +2113,11 @@ fn watch_here(ctx: &Ctx, only: &[String], after: Option<i64>, steps: bool, out: 
                 return Ok(());
             }
         }
-        let gone: Vec<String> = said.keys().filter(|addr| !procs.iter().any(|p| &p.addr == *addr)).cloned().collect();
+        let gone: Vec<String> = said
+            .keys()
+            .filter(|addr| !procs.iter().any(|p| &p.addr == *addr))
+            .cloned()
+            .collect();
         for addr in gone {
             said.remove(&addr);
             if !out.line(&line(json!({"kind": "gone", "id": addr}))) {
